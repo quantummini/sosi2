@@ -20,11 +20,7 @@ async def delete_catalog_job(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         (
-            'Добро пожаловать! '
-            '<tg-emoji emoji-id="5339547060859345402">☺</tg-emoji>\n\n'
-            'Мы знаем, как найти то, что вам нужно. '
-            'От мощных игровых станций до компактных смартфонов — '
-            'поможем разобраться в мире гаджетов без лишнего шума.'
+            'Добро пожаловать! 
         ),
         reply_markup=reply_menu,
         parse_mode="HTML"
