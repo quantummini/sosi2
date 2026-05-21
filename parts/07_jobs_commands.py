@@ -20,7 +20,7 @@ async def delete_catalog_job(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         (
-            'Добро пожаловать! 
+        'Добро пожаловать! 
         ),
         reply_markup=reply_menu,
         parse_mode="HTML"
