@@ -71,6 +71,73 @@ async def show_products_or_card(query, context, filters):
     await safe_show_text(query, text_msg, InlineKeyboardMarkup(keyboard))
 
 
+def admin_level_title(field):
+    return get_catalog_field_label(field).capitalize()
+
+
+def admin_level_back_callback(field):
+    alias = get_catalog_field_alias(field)
+    return f"admin_edit_level_{alias}"
+
+
+async def show_admin_level_editor(query, field, page=0):
+    label = admin_level_title(field)
+    values = get_catalog_field_values(field)
+
+    if not values:
+        await safe_show_text(
+            query,
+            f"Редактор: {label}\n\nПунктов пока нет.",
+            InlineKeyboardMarkup([
+                [button("Назад в админ-панель", "admin_menu")],
+            ]),
+        )
+        return
+
+    await safe_show_text(
+        query,
+        f"Редактор: {label}\n\nВыберите пункт для редактирования:",
+        admin_catalog_level_keyboard(field, page=page),
+    )
+
+
+async def show_admin_level_value_detail(query, payload):
+    field = payload.get("field")
+    value = payload.get("value", "")
+    label = admin_level_title(field)
+    total = count_catalog_field_value_products(field, value)
+    products = get_catalog_field_value_products(field, value, limit=12)
+
+    lines = [
+        f"Редактор: {label}",
+        "",
+        f"Пункт: {value}",
+        f"Товаров с этим пунктом: {total}",
+    ]
+
+    if products:
+        lines.append("\nПримеры товаров:")
+        for product_id, product_name, price, brand, category, series, model, sim, memory, color in products:
+            path = " → ".join(part for part in [brand, category, series, model, sim, memory, color] if part)
+            lines.append(f"#{product_id} — {product_name} — {price}")
+            if path:
+                lines.append(f"   {path}")
+
+        if total > len(products):
+            lines.append(f"\nПоказаны первые {len(products)} из {total}.")
+
+    await safe_show_text(
+        query,
+        "\n".join(lines),
+        InlineKeyboardMarkup([
+            [button("Переименовать пункт", make_admin_catalog_value_callback("rename", field, value))],
+            [danger_button("Удалить пункт и скрыть товары", make_admin_catalog_value_callback("delete_confirm", field, value))],
+            [button("Назад к списку", admin_level_back_callback(field))],
+            [button("Назад в админ-панель", "admin_menu")],
+        ]),
+    )
+
+
 async def show_catalog_step(query, context, step, filters):
     filters = normalize_filters(filters or {})
     selected = build_selected_catalog_text(filters)
@@ -485,6 +552,109 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("\nОтправьте Telegram ID админа, которого нужно удалить:")
         context.user_data["admin_state"] = "delete_admin_id"
         await safe_show_text(query, "\n".join(lines), cancel_admin_keyboard())
+        return
+
+    # ===== ADMIN CATALOG LEVEL EDITORS =====
+
+    if data.startswith("admin_edit_level_"):
+        if not is_admin_user(query.from_user.id) or not is_admin_logged(context):
+            await safe_show_text(query, "Нет доступа.")
+            return
+
+        alias = data.replace("admin_edit_level_", "", 1)
+        field = get_catalog_field_by_alias(alias)
+        if not field:
+            await safe_show_text(query, "Ошибка: неизвестный раздел редактора.", admin_keyboard())
+            return
+
+        await show_admin_level_editor(query, field, page=0)
+        return
+
+    if data.startswith("admin_level_page_"):
+        if not is_admin_user(query.from_user.id) or not is_admin_logged(context):
+            await safe_show_text(query, "Нет доступа.")
+            return
+
+        raw = data.replace("admin_level_page_", "", 1)
+        field, page_text = raw.rsplit("_", 1)
+        try:
+            page = int(page_text)
+        except ValueError:
+            page = 0
+
+        if field not in CATALOG_FIELD_LABELS:
+            await safe_show_text(query, "Ошибка: неизвестный раздел редактора.", admin_keyboard())
+            return
+
+        await show_admin_level_editor(query, field, page=page)
+        return
+
+    if data.startswith("admv_"):
+        if not is_admin_user(query.from_user.id) or not is_admin_logged(context):
+            await safe_show_text(query, "Нет доступа.")
+            return
+
+        token = data.replace("admv_", "", 1)
+        payload = get_admin_catalog_value_callback(token)
+        if not payload:
+            await safe_show_text(query, "Кнопка редактора устарела. Откройте админку заново.", admin_keyboard())
+            return
+
+        action = payload.get("action")
+        field = payload.get("field")
+        value = payload.get("value", "")
+
+        if field not in CATALOG_FIELD_LABELS:
+            await safe_show_text(query, "Ошибка: неизвестный пункт каталога.", admin_keyboard())
+            return
+
+        if action == "open":
+            await show_admin_level_value_detail(query, payload)
+            return
+
+        if action == "rename":
+            context.user_data["edit_level_field"] = field
+            context.user_data["edit_level_value"] = value
+            context.user_data["admin_state"] = "rename_catalog_value"
+            extra = "\n\nДля серии или симки можно отправить -, чтобы очистить это поле у всех товаров с этим пунктом." if field in OPTIONAL_COLUMNS else ""
+            await safe_show_text(
+                query,
+                f"Введите новое значение для пункта:\n\n{admin_level_title(field)}: {value}{extra}",
+                cancel_admin_keyboard(),
+            )
+            return
+
+        if action == "delete_confirm":
+            count = count_catalog_field_value_products(field, value)
+            await safe_show_text(
+                query,
+                (
+                    "Подтвердите удаление пункта каталога.\n\n"
+                    f"{admin_level_title(field)}: {value}\n"
+                    f"Будет скрыто товаров: {count}\n\n"
+                    "Это действие не удаляет строки из базы навсегда, но товары перестанут отображаться в каталоге."
+                ),
+                InlineKeyboardMarkup([
+                    [danger_button("Да, удалить и скрыть товары", make_admin_catalog_value_callback("delete_apply", field, value))],
+                    [button("Отмена", make_admin_catalog_value_callback("open", field, value))],
+                ]),
+            )
+            return
+
+        if action == "delete_apply":
+            deleted_count = delete_catalog_field_value(field, value)
+            await safe_show_text(
+                query,
+                (
+                    "Пункт каталога удалён ✅\n\n"
+                    f"{admin_level_title(field)}: {value}\n"
+                    f"Скрыто товаров: {deleted_count}"
+                ),
+                admin_keyboard(),
+            )
+            return
+
+        await safe_show_text(query, "Неизвестное действие редактора.", admin_keyboard())
         return
 
     # ===== ADMIN PRODUCTS =====

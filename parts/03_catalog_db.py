@@ -16,6 +16,54 @@ CATALOG_COLUMNS = {
 
 OPTIONAL_COLUMNS = {"series_name", "sim_name"}
 
+CATALOG_FIELD_LABELS = {
+    "brand_name": "бренд",
+    "category_name": "категория",
+    "series_name": "серия",
+    "model_name": "модель",
+    "sim_name": "симка",
+    "memory_name": "память",
+    "color_name": "цвет",
+}
+
+CATALOG_FIELD_ALIASES = {
+    "brand": "brand_name",
+    "brands": "brand_name",
+    "category": "category_name",
+    "categories": "category_name",
+    "series": "series_name",
+    "model": "model_name",
+    "models": "model_name",
+    "sim": "sim_name",
+    "sims": "sim_name",
+    "memory": "memory_name",
+    "memories": "memory_name",
+    "color": "color_name",
+    "colors": "color_name",
+}
+
+CATALOG_FIELD_CALLBACK_ALIASES = {
+    "brand_name": "brand",
+    "category_name": "category",
+    "series_name": "series",
+    "model_name": "model",
+    "sim_name": "sim",
+    "memory_name": "memory",
+    "color_name": "color",
+}
+
+
+def get_catalog_field_label(field):
+    return CATALOG_FIELD_LABELS.get(field, field)
+
+
+def get_catalog_field_by_alias(alias):
+    return CATALOG_FIELD_ALIASES.get(alias)
+
+
+def get_catalog_field_alias(field):
+    return CATALOG_FIELD_CALLBACK_ALIASES.get(field, field)
+
 
 def clean_catalog_value(value, optional=False):
     value = " ".join(str(value or "").strip().split())
@@ -114,6 +162,98 @@ def count_catalog_products(filters=None):
         with conn.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM products WHERE {where_sql};", params)
             return cur.fetchone()[0]
+
+
+def get_catalog_field_values(field):
+    if field not in CATALOG_FIELD_LABELS:
+        return []
+
+    # Пустые серия/симка нужны для пропуска шага в клиентском каталоге,
+    # но в редакторе отдельным пунктом их показывать не нужно.
+    return get_catalog_options({}, field, include_empty=False)
+
+
+def get_catalog_field_value_products(field, value, limit=15):
+    if field not in CATALOG_FIELD_LABELS:
+        return []
+
+    value = clean_catalog_value(value, optional=field in OPTIONAL_COLUMNS)
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    id,
+                    name,
+                    price,
+                    COALESCE(brand_name, ''),
+                    COALESCE(category_name, ''),
+                    COALESCE(series_name, ''),
+                    COALESCE(model_name, ''),
+                    COALESCE(sim_name, ''),
+                    COALESCE(memory_name, ''),
+                    COALESCE(color_name, '')
+                FROM products
+                WHERE is_active = TRUE
+                  AND COALESCE({field}, '') = %s
+                ORDER BY brand_name, category_name, series_name, model_name, sim_name, memory_name, color_name, name, id
+                LIMIT %s;
+            """, (value, limit))
+            return cur.fetchall()
+
+
+def count_catalog_field_value_products(field, value):
+    if field not in CATALOG_FIELD_LABELS:
+        return 0
+
+    value = clean_catalog_value(value, optional=field in OPTIONAL_COLUMNS)
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT COUNT(*)
+                FROM products
+                WHERE is_active = TRUE
+                  AND COALESCE({field}, '') = %s;
+            """, (value,))
+            return cur.fetchone()[0]
+
+
+def update_catalog_field_value(field, old_value, new_value):
+    if field not in CATALOG_FIELD_LABELS:
+        return 0
+
+    old_value = clean_catalog_value(old_value, optional=field in OPTIONAL_COLUMNS)
+    new_value = clean_catalog_value(new_value, optional=field in OPTIONAL_COLUMNS)
+
+    if field not in OPTIONAL_COLUMNS and not new_value:
+        raise ValueError(f"Поле '{get_catalog_field_label(field)}' нельзя очистить.")
+
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                UPDATE products
+                SET {field} = %s,
+                    updated_at = NOW()
+                WHERE is_active = TRUE
+                  AND COALESCE({field}, '') = %s;
+            """, (new_value, old_value))
+            return cur.rowcount
+
+
+def delete_catalog_field_value(field, value):
+    if field not in CATALOG_FIELD_LABELS:
+        return 0
+
+    value = clean_catalog_value(value, optional=field in OPTIONAL_COLUMNS)
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                UPDATE products
+                SET is_active = FALSE,
+                    updated_at = NOW()
+                WHERE is_active = TRUE
+                  AND COALESCE({field}, '') = %s;
+            """, (value,))
+            return cur.rowcount
 
 
 # =========================

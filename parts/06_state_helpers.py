@@ -17,6 +17,8 @@ def clear_admin_temp_data(context):
         "new_product_photo_file_id",
         "edit_product_id",
         "edit_catalog_field",
+        "edit_level_field",
+        "edit_level_value",
         "admin_login_input",
         "new_admin_id_input",
         "delete_admin_id_input",

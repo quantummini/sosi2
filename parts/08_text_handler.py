@@ -758,9 +758,49 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             clear_admin_temp_data(context)
             await update.message.reply_text("Ошибка. Товар не найден.", reply_markup=admin_keyboard())
             return
-        update_product_catalog_fields(product_id, {field_name: text})
+        try:
+            update_product_catalog_fields(product_id, {field_name: text})
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка обновления поля:\n{e}", reply_markup=cancel_admin_keyboard())
+            return
         clear_admin_temp_data(context)
         await update.message.reply_text("Поле товара обновлено ✅", reply_markup=admin_keyboard())
+        return
+
+    if admin_state == "rename_catalog_value":
+        if not is_admin_user(user_id) or not is_admin_logged(context):
+            await update.message.reply_text("Нет доступа.")
+            return
+
+        field_name = context.user_data.get("edit_level_field")
+        old_value = context.user_data.get("edit_level_value")
+
+        if not field_name or old_value is None:
+            clear_admin_temp_data(context)
+            await update.message.reply_text("Ошибка. Пункт каталога не найден.", reply_markup=admin_keyboard())
+            return
+
+        try:
+            changed_count = update_catalog_field_value(field_name, old_value, text)
+        except Exception as e:
+            await update.message.reply_text(
+                f"Ошибка переименования пункта:\n{e}",
+                reply_markup=cancel_admin_keyboard(),
+            )
+            return
+
+        label = get_catalog_field_label(field_name).capitalize()
+        new_value = clean_catalog_value(text, optional=field_name in OPTIONAL_COLUMNS)
+        clear_admin_temp_data(context)
+
+        await update.message.reply_text(
+            (
+                "Пункт каталога обновлён ✅\n\n"
+                f"{label}: {old_value} → {new_value or 'не указано'}\n"
+                f"Изменено товаров: {changed_count}"
+            ),
+            reply_markup=admin_keyboard(),
+        )
         return
 
     # ===== BULK CATALOG ADD =====

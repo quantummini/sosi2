@@ -21,6 +21,7 @@ order_menu = ReplyKeyboardMarkup(
 
 # Callback cache for catalog navigation. It keeps callback_data short and safe.
 CATALOG_CALLBACK_CACHE = {}
+ADMIN_CATALOG_VALUE_CACHE = {}
 
 
 def make_catalog_callback(step, filters=None):
@@ -36,6 +37,22 @@ def make_catalog_callback(step, filters=None):
 
 def get_catalog_callback(token):
     return CATALOG_CALLBACK_CACHE.get(token)
+
+
+def make_admin_catalog_value_callback(action, field, value):
+    payload = {
+        "action": action,
+        "field": field,
+        "value": clean_catalog_value(value, optional=field in OPTIONAL_COLUMNS),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    token = hashlib.md5(raw.encode("utf-8")).hexdigest()[:18]
+    ADMIN_CATALOG_VALUE_CACHE[token] = payload
+    return f"admv_{token}"
+
+
+def get_admin_catalog_value_callback(token):
+    return ADMIN_CATALOG_VALUE_CACHE.get(token)
 
 
 def button(text, callback_data, style=None):
@@ -133,6 +150,13 @@ def admin_keyboard():
         [button("➕ Добавить товар", "admin_add_product")],
         [button("📦 Массовое добавление каталога", "admin_bulk_catalog")],
         [button("⚡ Массовое обновление цен", "admin_bulk_prices")],
+        [button("🧩 Редактор брендов", "admin_edit_level_brand")],
+        [button("📂 Редактор категорий", "admin_edit_level_category")],
+        [button("🧬 Редактор серий", "admin_edit_level_series")],
+        [button("📱 Редактор моделей", "admin_edit_level_model")],
+        [button("📶 Редактор симок", "admin_edit_level_sim")],
+        [button("💾 Редактор памяти", "admin_edit_level_memory")],
+        [button("🎨 Редактор цветов", "admin_edit_level_color")],
         [button("📦 Редактор товаров", "admin_products")],
         [button(" Добавить админа", "admin_add_admin")],
         [button(" Список админов", "admin_list_admins")],
@@ -170,5 +194,23 @@ def admin_products_keyboard(page=0):
         ])
 
     keyboard += pagination_buttons("admin_products_page", page, total)
+    keyboard.append([button("Назад в админ-панель", "admin_menu")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def admin_catalog_level_keyboard(field, page=0):
+    values = get_catalog_field_values(field)
+    page_items, total = paginate_items(values, page)
+
+    keyboard = []
+    for representative_id, value, count in page_items:
+        keyboard.append([
+            button(
+                f"{value} ({count})",
+                make_admin_catalog_value_callback("open", field, value),
+            )
+        ])
+
+    keyboard += pagination_buttons(f"admin_level_page_{field}", page, total)
     keyboard.append([button("Назад в админ-панель", "admin_menu")])
     return InlineKeyboardMarkup(keyboard)
