@@ -28,7 +28,7 @@ USE_PREMIUM_BUTTON_EMOJI = True
 ORDER_SUCCESS_STICKER = os.getenv("ORDER_SUCCESS_STICKER", "").strip()
 
 # Невидимая строка для расширения пузыря сообщений.
-# Если нужно шире/уже — меняй число 30.
+# Если нужно шире/уже - меняй число 30.
 WIDE_MESSAGE_PAD = "⠀" * 30
 
 
@@ -39,6 +39,7 @@ def wide_text(text):
     # Добавляем невидимую строку в конец.
     # Так пузырь становится шире, а сверху не появляется пустой отступ.
     return f"{text}\n{WIDE_MESSAGE_PAD}"
+
 
 ADMIN_PANEL_TEXT = (
     "⚙️ Админ-панель\n\n"
@@ -51,7 +52,7 @@ CATALOG_TEXT = (
 )
 
 ABOUT_TEXT = (
-    "О нас\n\n"
+    "ℹ️ О нас\n\n"
     "Мы занимаемся продажей качественной техники и аксессуаров.\n"
     "Помогаем подобрать подходящий товар, консультируем по наличию, "
     "ценам и доставке.\n\n"
@@ -78,6 +79,7 @@ BULK_CATALOG_HELP_TEXT = (
     "— если категория/модель/вид уже есть, бот не создаст дубль, а использует существующий пункт"
 )
 
+
 # =========================
 # ENV
 # =========================
@@ -101,6 +103,7 @@ def get_admin_id():
     admin_id = get_env("ADMIN_ID")
     if not admin_id:
         return None
+
     try:
         return int(admin_id)
     except ValueError:
@@ -143,12 +146,9 @@ def extract_text_and_custom_emoji(message):
     text = message.text or message.caption or ""
     emoji_id = None
     cleaned_text = text
-    entities = message.entities or message.caption_entities or []
 
-    custom_entities = [
-        entity for entity in entities
-        if entity.type == "custom_emoji"
-    ]
+    entities = message.entities or message.caption_entities or []
+    custom_entities = [entity for entity in entities if entity.type == "custom_emoji"]
 
     if custom_entities:
         emoji_id = custom_entities[0].custom_emoji_id
@@ -157,12 +157,16 @@ def extract_text_and_custom_emoji(message):
             cleaned_text = remove_utf16_range(
                 cleaned_text,
                 entity.offset,
-                entity.length
+                entity.length,
             )
 
     cleaned_text = " ".join(cleaned_text.split()).strip()
     return cleaned_text, emoji_id
 
+
+# =========================
+# ORDER HELPERS
+# =========================
 
 def normalize_ru_phone(raw_phone):
     digits = re.sub(r"\D", "", raw_phone or "")
@@ -182,7 +186,7 @@ def normalize_ru_phone(raw_phone):
     if len(digits) == 11 and digits.startswith("7"):
         digits = "8" + digits[1:]
 
-    if len(digits)!= 11:
+    if len(digits) != 11:
         return None
 
     if not digits.startswith("8"):
@@ -196,7 +200,6 @@ def normalize_ru_phone(raw_phone):
 
 def address_has_city(address):
     text = " ".join((address or "").strip().split())
-
     if not text:
         return False
 
@@ -209,12 +212,9 @@ def address_has_city(address):
     if re.search(r"(^|[\s,])город\s+[а-яёa-z]", lower, re.IGNORECASE):
         return True
 
-    # Вариант: "Москва, Парковый 1" — первая часть до запятой считается городом.
+    # Вариант: "Москва, Парковый 1" - первая часть до запятой считается городом.
     parts = [part.strip() for part in text.split(",") if part.strip()]
-
     if len(parts) >= 2 and re.search(r"[а-яёa-z]", parts[0], re.IGNORECASE):
         return True
 
     return False
-
-
