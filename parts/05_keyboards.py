@@ -4,9 +4,9 @@
 
 reply_menu = ReplyKeyboardMarkup(
     keyboard=[
-      ["📦 Каталог"],
-        ["🛒 Корзина"],
-        ["ℹ О нас"],
+        [" Каталог"],
+        [" Корзина"],
+        ["ℹ️ О нас"],
     ],
     resize_keyboard=True,
 )
