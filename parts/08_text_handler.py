@@ -2,8 +2,8 @@
 # TEXT HANDLER
 # =========================
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    def normalize_bulk_name(value):
+
+def normalize_bulk_name(value):
     return " ".join((value or "").strip().split()).lower()
 
 
@@ -68,7 +68,7 @@ def ensure_bulk_model(category_id, name, stats):
         category_id=category_id,
         name=name,
         description="",
-        emoji_id=None
+        emoji_id=None,
     )
     stats["models_created"] += 1
     return model_id
@@ -84,7 +84,7 @@ def ensure_bulk_type(model_id, name, stats):
         model_id=model_id,
         name=name,
         description="",
-        emoji_id=None
+        emoji_id=None,
     )
     stats["types_created"] += 1
     return type_id
@@ -117,6 +117,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             parts.pop()
 
         if not parts:
+            stats["skipped"] += 1
             continue
 
         try:
@@ -170,7 +171,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             type_name = parts[2]
             product_name = parts[3]
             price = parts[4]
-            description = parts[5] if len(parts) >= 6 else ""
+            description = " | ".join(parts[5:]).strip() if len(parts) >= 6 else ""
 
             if not category_name or not model_name or not type_name or not product_name or not price:
                 errors.append(
@@ -200,7 +201,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 description=description,
                 photo_file_id=None,
                 price=price,
-                emoji_id=None
+                emoji_id=None,
             )
 
             if product_id:
@@ -213,7 +214,11 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
     return stats, errors
 
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    text_clean = text.strip()
+
     user = update.effective_user
     user_id = user.id
     username = f"@{user.username}" if user.username else None
@@ -222,22 +227,35 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
     admin_state = context.user_data.get("admin_state")
     order_state = context.user_data.get("order_state")
 
-    if order_state and text in ["❌ Отменить оформление", "/cancel", "отмена", "Отмена"]:
+    # ===== ORDER CANCEL / MENU =====
+
+    if order_state and text_clean in ["❌ Отменить оформление", "/cancel", "отмена", "Отмена"]:
         await cancel_order_flow(update, context)
         return
 
-    if order_state and text == "📦 Каталог":
+    if order_state and text_clean.endswith("Каталог"):
         await cancel_order_flow(update, context, "Оформление заказа отменено. Открываю каталог.")
         await send_catalog(update, context)
         return
 
-    if order_state and text == "🛒 Корзина":
+    if order_state and text_clean.endswith("Корзина"):
         await cancel_order_flow(update, context, "Оформление заказа отменено. Открываю корзину.")
         await send_cart_message(update, context)
         return
 
+    # ===== ADMIN CANCEL =====
+
+    if admin_state and text_clean.lower() in ["назад", "отмена", "/cancel"]:
+        clear_admin_temp_data(context)
+        await update.message.reply_text(
+            ADMIN_PANEL_TEXT,
+            reply_markup=admin_keyboard(),
+        )
+        return
+
     # ===== FAST FIX: PRODUCT PRICE AFTER PHOTO =====
     # Этот блок стоит высоко специально, чтобы цена товара точно сохранялась.
+
     if admin_state == "add_product_price":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
@@ -253,7 +271,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         if not price:
             await update.message.reply_text(
                 "Цена пустая. Введите цену товара, например: 100 000",
-                reply_markup=cancel_admin_keyboard()
+                reply_markup=cancel_admin_keyboard(),
             )
             return
 
@@ -265,7 +283,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                     f"name: {name}\n\n"
                     "Попробуйте добавить товар заново."
                 ),
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
             clear_admin_temp_data(context)
             return
@@ -277,12 +295,12 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 description=description,
                 photo_file_id=photo_file_id,
                 price=price,
-                emoji_id=emoji_id
+                emoji_id=emoji_id,
             )
         except Exception as e:
             await update.message.reply_text(
                 f"Ошибка сохранения товара:\n{e}",
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
             clear_admin_temp_data(context)
             return
@@ -290,13 +308,12 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         if not product_id:
             await update.message.reply_text(
                 "Ошибка: вид товара не найден.",
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
             clear_admin_temp_data(context)
             return
 
         clear_admin_temp_data(context)
-
         await update.message.reply_text(
             (
                 "Товар добавлен ✅\n\n"
@@ -306,25 +323,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 f"Фото: {'есть' if photo_file_id else 'нет'}\n"
                 f"Premium emoji: {'есть' if emoji_id else 'нет'}"
             ),
-            reply_markup=admin_keyboard()
-        )
-        return
-
-    if admin_state and text.lower() in ["назад", "отмена", "/cancel"]:
-        clear_admin_temp_data(context)
-
-        await update.message.reply_text(
-            ADMIN_PANEL_TEXT,
-            reply_markup=admin_keyboard()
-        )
-        return
-
-    if order_state and text.lower() in ["назад", "отмена", "/cancel"]:
-        clear_order_data(context)
-
-        await update.message.reply_text(
-            "Оформление заказа отменено.",
-            reply_markup=reply_menu
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -336,7 +335,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
         await update.message.reply_text(
             "Введите номер телефона:",
-            reply_markup=order_menu
+            reply_markup=order_menu,
         )
         return
 
@@ -354,7 +353,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                     "Можно писать слитно, без пробелов, со скобками или дефисами.\n"
                     "Например: 89777777777"
                 ),
-                reply_markup=order_menu
+                reply_markup=order_menu,
             )
             return
 
@@ -367,7 +366,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 "Обязательно укажите город.\n"
                 "Пример: г. Москва, ул. Примерная 1"
             ),
-            reply_markup=order_menu
+            reply_markup=order_menu,
         )
         return
 
@@ -385,7 +384,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                     "Или:\n"
                     "Москва, ул. Примерная 1"
                 ),
-                reply_markup=order_menu
+                reply_markup=order_menu,
             )
             return
 
@@ -396,12 +395,11 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             clear_order_data(context)
             await update.message.reply_text(
                 "Нет товаров для оформления. Заказ отменён.",
-                reply_markup=reply_menu
+                reply_markup=reply_menu,
             )
             return
 
         admin_id = get_admin_id()
-
         if not admin_id:
             clear_order_data(context)
             await update.message.reply_text("ADMIN_ID не настроен.")
@@ -412,7 +410,6 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         try:
             for product_id in valid_product_ids:
                 product = get_product(product_id)
-
                 if not product:
                     continue
 
@@ -424,7 +421,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                     address=order_address,
                     product_id=product[0],
                     product_name=product[1],
-                    price=product[4]
+                    price=product[4],
                 )
 
             order_text = build_admin_order_text(
@@ -434,17 +431,18 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 order_address=order_address,
                 lines=lines,
                 username=username,
-                user_id=user.id
+                user_id=user.id,
             )
 
             await context.bot.send_message(
                 chat_id=admin_id,
-                text=order_text
+                text=order_text,
             )
+
         except Exception as e:
             await update.message.reply_text(
                 f"Ошибка оформления заказа:\n{e}",
-                reply_markup=reply_menu
+                reply_markup=reply_menu,
             )
             return
 
@@ -453,20 +451,19 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             order_name=order_name,
             order_phone=order_phone,
             order_address=order_address,
-            lines=lines
+            lines=lines,
         )
 
         if ORDER_SUCCESS_STICKER:
             try:
                 await context.bot.send_sticker(
                     chat_id=update.effective_chat.id,
-                    sticker=ORDER_SUCCESS_STICKER
+                    sticker=ORDER_SUCCESS_STICKER,
                 )
             except Exception:
                 pass
 
         checkout_source = context.user_data.get("checkout_source")
-
         if checkout_source == "cart":
             clear_cart(context)
 
@@ -475,7 +472,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         await update.message.reply_text(
             wide_text(pretty_text),
             parse_mode=ParseMode.HTML,
-            reply_markup=reply_menu
+            reply_markup=reply_menu,
         )
         return
 
@@ -491,7 +488,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             context.user_data["admin_state"] = "wait_password"
             message = await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="Теперь введите пароль:"
+                text="Теперь введите пароль:",
             )
             context.user_data["admin_password_prompt_id"] = message.message_id
         else:
@@ -499,7 +496,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             save_admin_login_attempt(user_id, username, full_name, text, False)
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="Неверный логин."
+                text="Неверный логин.",
             )
         return
 
@@ -513,6 +510,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             if not is_main_admin(user_id) and not is_admin_in_db(user_id):
                 context.user_data["admin_logged"] = False
                 context.user_data["admin_state"] = None
+
                 save_admin_login_attempt(user_id, username, full_name, login, False)
 
                 await context.bot.send_message(
@@ -520,7 +518,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                     text=(
                         "Доступ запрещён.\n\n"
                         "Логин и пароль верные, но ваш Telegram ID не добавлен в список админов."
-                    )
+                    ),
                 )
                 return
 
@@ -535,15 +533,17 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="Вход выполнен ✅\n\n" + ADMIN_PANEL_TEXT,
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
         else:
             context.user_data["admin_logged"] = False
             context.user_data["admin_state"] = None
+
             save_admin_login_attempt(user_id, username, full_name, login, False)
+
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="Неверный пароль."
+                text="Неверный пароль.",
             )
         return
 
@@ -561,14 +561,14 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         except ValueError:
             await update.message.reply_text(
                 "Telegram ID должен быть числом.\n\nНапример: 707131428",
-                reply_markup=cancel_admin_keyboard()
+                reply_markup=cancel_admin_keyboard(),
             )
             return
 
         add_admin_to_db(
             telegram_id=new_admin_id,
             username=None,
-            full_name="Добавлен владельцем"
+            full_name="Добавлен владельцем",
         )
 
         clear_admin_temp_data(context)
@@ -579,7 +579,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 f"Telegram ID: {new_admin_id}\n\n"
                 "Теперь этот сотрудник сможет войти через /admin по логину и паролю."
             ),
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -595,14 +595,14 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         except ValueError:
             await update.message.reply_text(
                 "Telegram ID должен быть числом.\n\nНапример: 707131428",
-                reply_markup=cancel_admin_keyboard()
+                reply_markup=cancel_admin_keyboard(),
             )
             return
 
         if admin_id_to_delete == get_admin_id():
             await update.message.reply_text(
                 "Основного админа удалить нельзя.",
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
             clear_admin_temp_data(context)
             return
@@ -617,7 +617,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                     f"Telegram ID: {admin_id_to_delete}\n\n"
                     "Теперь этот пользователь не сможет войти в админку."
                 ),
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
         else:
             await update.message.reply_text(
@@ -625,7 +625,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                     "Админ не найден.\n\n"
                     f"Telegram ID: {admin_id_to_delete}"
                 ),
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
         return
 
@@ -641,7 +641,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         if not category_name:
             await update.message.reply_text(
                 "Название категории пустое. Отправьте premium emoji вместе с текстом, например: [emoji] iPhone",
-                reply_markup=cancel_admin_keyboard()
+                reply_markup=cancel_admin_keyboard(),
             )
             return
 
@@ -655,7 +655,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 f"Название: {category_name}\n"
                 f"Premium emoji: {'есть' if emoji_id else 'нет'}"
             ),
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -675,7 +675,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         if not category_name:
             await update.message.reply_text(
                 "Название категории пустое.",
-                reply_markup=cancel_admin_keyboard()
+                reply_markup=cancel_admin_keyboard(),
             )
             return
 
@@ -687,12 +687,12 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                     f"Новое название: {category_name}\n"
                     f"Premium emoji: {'есть' if emoji_id else 'нет'}"
                 ),
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
         except Exception as e:
             await update.message.reply_text(
                 f"Ошибка переименования категории:\n{e}",
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
 
         clear_admin_temp_data(context)
@@ -710,7 +710,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         if not model_name:
             await update.message.reply_text(
                 "Название модели пустое. Отправьте premium emoji вместе с текстом, например: [emoji] iPhone 17",
-                reply_markup=cancel_admin_keyboard()
+                reply_markup=cancel_admin_keyboard(),
             )
             return
 
@@ -723,7 +723,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 "Введите описание модели.\n\n"
                 "Если описание не нужно, напишите -"
             ),
-            reply_markup=cancel_admin_keyboard()
+            reply_markup=cancel_admin_keyboard(),
         )
         return
 
@@ -741,7 +741,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             clear_admin_temp_data(context)
             await update.message.reply_text(
                 "Ошибка добавления модели. Попробуйте заново.",
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
             return
 
@@ -755,7 +755,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 f"Название: {model_name}\n"
                 f"Premium emoji: {'есть' if emoji_id else 'нет'}"
             ),
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -776,7 +776,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
         await update.message.reply_text(
             f"Модель переименована ✅\n\nНовое название: {text}",
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -798,7 +798,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
         await update.message.reply_text(
             "Описание модели обновлено ✅",
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -814,7 +814,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         if not type_name:
             await update.message.reply_text(
                 "Название вида товара пустое. Отправьте premium emoji вместе с текстом, например: [emoji] e-Sim",
-                reply_markup=cancel_admin_keyboard()
+                reply_markup=cancel_admin_keyboard(),
             )
             return
 
@@ -828,7 +828,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 "Например: модели только с e-Sim.\n"
                 "Если описание не нужно, напишите -"
             ),
-            reply_markup=cancel_admin_keyboard()
+            reply_markup=cancel_admin_keyboard(),
         )
         return
 
@@ -846,7 +846,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             clear_admin_temp_data(context)
             await update.message.reply_text(
                 "Ошибка добавления вида товара. Попробуйте заново.",
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
             return
 
@@ -860,7 +860,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 f"Название: {type_name}\n"
                 f"Premium emoji: {'есть' if emoji_id else 'нет'}"
             ),
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -881,7 +881,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
         await update.message.reply_text(
             f"Вид товара переименован ✅\n\nНовое название: {text}",
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -903,7 +903,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
         await update.message.reply_text(
             "Описание вида товара обновлено ✅",
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -919,7 +919,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
         if not product_name:
             await update.message.reply_text(
                 "Название товара пустое. Отправьте premium emoji вместе с текстом, например: [emoji] iPhone 17 256GB e-Sim Blue",
-                reply_markup=cancel_admin_keyboard()
+                reply_markup=cancel_admin_keyboard(),
             )
             return
 
@@ -932,7 +932,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 "Введите описание товара.\n\n"
                 "Если описание не нужно, напишите -"
             ),
-            reply_markup=cancel_admin_keyboard()
+            reply_markup=cancel_admin_keyboard(),
         )
         return
 
@@ -950,7 +950,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 "Отправьте фото товара.\n\n"
                 "Если фото не нужно, напишите -"
             ),
-            reply_markup=cancel_admin_keyboard()
+            reply_markup=cancel_admin_keyboard(),
         )
         return
 
@@ -965,13 +965,13 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
             await update.message.reply_text(
                 "Введите цену товара:",
-                reply_markup=cancel_admin_keyboard()
+                reply_markup=cancel_admin_keyboard(),
             )
             return
 
         await update.message.reply_text(
             "Нужно отправить фото или написать -",
-            reply_markup=cancel_admin_keyboard()
+            reply_markup=cancel_admin_keyboard(),
         )
         return
 
@@ -994,7 +994,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
         await update.message.reply_text(
             f"Название товара обновлено ✅\n\nНовое название: {text}",
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -1016,7 +1016,7 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
         await update.message.reply_text(
             "Описание товара обновлено ✅",
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
@@ -1038,13 +1038,13 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
 
             await update.message.reply_text(
                 "Фото товара удалено ✅",
-                reply_markup=admin_keyboard()
+                reply_markup=admin_keyboard(),
             )
             return
 
         await update.message.reply_text(
             "Отправьте новое фото или напишите - чтобы удалить фото.",
-            reply_markup=cancel_admin_keyboard()
+            reply_markup=cancel_admin_keyboard(),
         )
         return
 
@@ -1069,44 +1069,48 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
                 f"Было: {old_price}\n"
                 f"Стало: {text}"
             ),
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
+        )
+        return
+
+    # ===== BULK CATALOG ADD =====
+
+    if admin_state == "bulk_catalog_add":
+        if not is_admin_user(user_id) or not is_admin_logged(context):
+            await update.message.reply_text("Нет доступа.")
+            return
+
+        stats, errors = process_bulk_catalog_text(text, changed_by=user_id)
+        clear_admin_temp_data(context)
+
+        result = (
+            "📦 Массовое добавление каталога завершено ✅\n\n"
+            f"Создано категорий: {stats['categories_created']}\n"
+            f"Создано моделей: {stats['models_created']}\n"
+            f"Создано видов товара: {stats['types_created']}\n"
+            f"Создано товаров: {stats['products_created']}\n"
+            f"Обновлено товаров: {stats['products_updated']}\n"
+            f"Пропущено строк: {stats['skipped']}"
+        )
+
+        if errors:
+            result += "\n\nОшибки:\n" + "\n".join(errors[:30])
+
+            if len(errors) > 30:
+                result += f"\n\nИ ещё ошибок: {len(errors) - 30}"
+
+        await update.message.reply_text(
+            result,
+            reply_markup=admin_keyboard(),
         )
         return
 
     # ===== BULK PRICE UPDATE =====
 
-    # ===== BULK CATALOG ADD =====
-
-if admin_state == "bulk_catalog_add":
-    if not is_admin_user(user_id) or not is_admin_logged(context):
-        await update.message.reply_text("Нет доступа.")
-        return
-
-    stats, errors = process_bulk_catalog_text(text, changed_by=user_id)
-
-    clear_admin_temp_data(context)
-
-    result = (
-        "📦 Массовое добавление каталога завершено ✅\n\n"
-        f"Создано категорий: {stats['categories_created']}\n"
-        f"Создано моделей: {stats['models_created']}\n"
-        f"Создано видов товара: {stats['types_created']}\n"
-        f"Создано товаров: {stats['products_created']}\n"
-        f"Обновлено товаров: {stats['products_updated']}\n"
-        f"Пропущено строк: {stats['skipped']}"
-    )
-
-    if errors:
-        result += "\n\nОшибки:\n" + "\n".join(errors[:30])
-
-        if len(errors) > 30:
-            result += f"\n\nИ ещё ошибок: {len(errors) - 30}"
-
-    await update.message.reply_text(
-        result,
-        reply_markup=admin_keyboard()
-    )
-    return
+    if admin_state == "bulk_prices":
+        if not is_admin_user(user_id) or not is_admin_logged(context):
+            await update.message.reply_text("Нет доступа.")
+            return
 
         updated = []
         errors = []
@@ -1133,7 +1137,6 @@ if admin_state == "bulk_catalog_add":
                 continue
 
             product = get_product(product_id)
-
             if not product:
                 errors.append(f"#{product_id} — товар не найден")
                 continue
@@ -1153,31 +1156,31 @@ if admin_state == "bulk_catalog_add":
 
         await update.message.reply_text(
             result,
-            reply_markup=admin_keyboard()
+            reply_markup=admin_keyboard(),
         )
         return
 
     # ===== NORMAL TEXT =====
 
-    if text == "📦 Каталог":
+    if text_clean.endswith("Каталог"):
         await send_catalog(update, context)
         return
 
-    if text == "🛒 Корзина":
+    if text_clean.endswith("Корзина"):
         await send_cart_message(update, context)
         return
 
-    if text_clean.endswith("ℹ О нас"):
-    await update.message.reply_text(
-        wide_text(ABOUT_TEXT),
-        reply_markup=reply_menu
-    )
-    return
+    if text_clean.endswith("О нас"):
+        await update.message.reply_text(
+            wide_text(ABOUT_TEXT),
+            reply_markup=reply_menu,
+        )
+        return
 
-await update.message.reply_text(
-    "Нажмите кнопку 📦 Каталог, 🛒 Корзина или ℹ О нас внизу.",
-    reply_markup=reply_menu
-)
+    await update.message.reply_text(
+        "Нажмите кнопку Каталог, Корзина или О нас внизу.",
+        reply_markup=reply_menu,
+    )
 
 
 async def send_cart_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1186,7 +1189,7 @@ async def send_cart_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not valid_product_ids:
         await update.message.reply_text(
             wide_text("Корзина\n\nКорзина пока пустая."),
-            reply_markup=reply_menu
+            reply_markup=reply_menu,
         )
         return
 
@@ -1198,7 +1201,5 @@ async def send_cart_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         text_msg,
-        reply_markup=cart_markup(context)
+        reply_markup=cart_markup(context),
     )
-
-
