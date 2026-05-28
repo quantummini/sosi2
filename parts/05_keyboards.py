@@ -6,6 +6,7 @@ reply_menu = ReplyKeyboardMarkup(
     keyboard=[
         ["📦 Каталог"],
         ["🛒 Корзина"],
+        ["ℹ О нас"],
     ],
     resize_keyboard=True
 )
@@ -119,6 +120,7 @@ def admin_keyboard():
         [button("➕ Добавить модель", "admin_add_model")],
         [button("➕ Добавить вид товара", "admin_add_type")],
         [button("➕ Добавить товар", "admin_add_product")],
+        [button("📦 Массовое добавление каталога", "admin_bulk_catalog")],
         [button("⚡ Массовое обновление цен", "admin_bulk_prices")],
         [button("🧩 Редактор категорий", "admin_edit_categories")],
         [button("📱 Редактор моделей", "admin_edit_models")],
