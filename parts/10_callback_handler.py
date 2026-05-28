@@ -618,10 +618,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ===== ADMIN BULK PRICES =====
 
-    elif data == "admin_bulk_prices":
-        if not is_admin_user(query.from_user.id) or not is_admin_logged(context):
-            await safe_show_text(query, "Нет доступа.")
-            return
+    elif data == "admin_bulk_catalog":
+    if not is_admin_user(query.from_user.id) or not is_admin_logged(context):
+        await safe_show_text(query, "Нет доступа.")
+        return
+
+    context.user_data["admin_state"] = "bulk_catalog_add"
+
+    await safe_show_text(
+        query,
+        BULK_CATALOG_HELP_TEXT,
+        cancel_admin_keyboard()
 
         products = get_all_products()
 
