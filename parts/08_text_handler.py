@@ -7,197 +7,113 @@ def normalize_bulk_name(value):
     return " ".join((value or "").strip().split()).lower()
 
 
-def find_category_id_by_name(name):
-    name_key = normalize_bulk_name(name)
+def parse_bulk_catalog_line(line):
+    parts = [part.strip() for part in line.split("|")]
 
-    for category_id, category_name in get_categories():
-        if normalize_bulk_name(category_name) == name_key:
-            return category_id
+    # Full format:
+    # Brand | Category | Series | Model | Sim | Memory | Color | Product | Price | Description
+    if len(parts) >= 9:
+        return {
+            "brand_name": parts[0],
+            "category_name": parts[1],
+            "series_name": clean_catalog_value(parts[2], optional=True),
+            "model_name": parts[3],
+            "sim_name": clean_catalog_value(parts[4], optional=True),
+            "memory_name": parts[5],
+            "color_name": parts[6],
+            "product_name": parts[7],
+            "price": parts[8],
+            "description": " | ".join(parts[9:]).strip() if len(parts) >= 10 else "",
+        }
 
-    return None
-
-
-def find_model_id_by_name(category_id, name):
-    name_key = normalize_bulk_name(name)
-
-    for model_id, model_name, description, emoji_id in get_models_by_category(category_id):
-        if normalize_bulk_name(model_name) == name_key:
-            return model_id
-
-    return None
-
-
-def find_type_id_by_name(model_id, name):
-    name_key = normalize_bulk_name(name)
-
-    for type_id, type_name, description, emoji_id in get_types_by_model(model_id):
-        if normalize_bulk_name(type_name) == name_key:
-            return type_id
-
-    return None
-
-
-def find_product_id_by_name(type_id, name):
-    name_key = normalize_bulk_name(name)
-
-    for product_id, product_name, description, photo_file_id, price, emoji_id in get_products_by_type(type_id):
-        if normalize_bulk_name(product_name) == name_key:
-            return product_id
+    # Short format without series and sim:
+    # Brand | Category | Model | Memory | Color | Product | Price | Description
+    if len(parts) >= 7:
+        return {
+            "brand_name": parts[0],
+            "category_name": parts[1],
+            "series_name": "",
+            "model_name": parts[2],
+            "sim_name": "",
+            "memory_name": parts[3],
+            "color_name": parts[4],
+            "product_name": parts[5],
+            "price": parts[6],
+            "description": " | ".join(parts[7:]).strip() if len(parts) >= 8 else "",
+        }
 
     return None
-
-
-def ensure_bulk_category(name, stats):
-    category_id = find_category_id_by_name(name)
-
-    if category_id:
-        return category_id
-
-    category_id = add_category(name)
-    stats["categories_created"] += 1
-    return category_id
-
-
-def ensure_bulk_model(category_id, name, stats):
-    model_id = find_model_id_by_name(category_id, name)
-
-    if model_id:
-        return model_id
-
-    model_id = add_model(
-        category_id=category_id,
-        name=name,
-        description="",
-        emoji_id=None,
-    )
-    stats["models_created"] += 1
-    return model_id
-
-
-def ensure_bulk_type(model_id, name, stats):
-    type_id = find_type_id_by_name(model_id, name)
-
-    if type_id:
-        return type_id
-
-    type_id = add_type(
-        model_id=model_id,
-        name=name,
-        description="",
-        emoji_id=None,
-    )
-    stats["types_created"] += 1
-    return type_id
 
 
 def process_bulk_catalog_text(raw_text, changed_by=None):
     stats = {
-        "categories_created": 0,
-        "models_created": 0,
-        "types_created": 0,
         "products_created": 0,
         "products_updated": 0,
         "skipped": 0,
     }
-
     errors = []
 
     for line_number, raw_line in enumerate(raw_text.splitlines(), start=1):
         line = raw_line.strip()
-
         if not line:
             continue
-
         if line.startswith("#"):
             continue
 
-        parts = [part.strip() for part in line.split("|")]
-
-        while parts and not parts[-1]:
-            parts.pop()
-
-        if not parts:
+        item = parse_bulk_catalog_line(line)
+        if not item:
             stats["skipped"] += 1
+            errors.append(
+                f"Строка {line_number}: неверный формат. Нужен полный формат из 9 колонок или короткий из 7 колонок."
+            )
+            continue
+
+        brand_name = clean_catalog_value(item["brand_name"])
+        category_name = clean_catalog_value(item["category_name"])
+        series_name = clean_catalog_value(item["series_name"], optional=True)
+        model_name = clean_catalog_value(item["model_name"])
+        sim_name = clean_catalog_value(item["sim_name"], optional=True)
+        memory_name = clean_catalog_value(item["memory_name"])
+        color_name = clean_catalog_value(item["color_name"])
+        product_name = clean_catalog_value(item["product_name"])
+        price = clean_catalog_value(item["price"])
+        description = item["description"]
+
+        if not all([brand_name, category_name, model_name, memory_name, color_name, product_name, price]):
+            stats["skipped"] += 1
+            errors.append(
+                f"Строка {line_number}: пустое обязательное поле. Нужны бренд, категория, модель, память, цвет, товар и цена."
+            )
             continue
 
         try:
-            # Формат: Категория
-            if len(parts) == 1:
-                category_name = parts[0]
-
-                if not category_name:
-                    stats["skipped"] += 1
-                    continue
-
-                ensure_bulk_category(category_name, stats)
-                continue
-
-            # Формат: Категория | Модель
-            if len(parts) == 2:
-                category_name, model_name = parts
-
-                if not category_name or not model_name:
-                    errors.append(f"Строка {line_number}: нужны категория и модель")
-                    continue
-
-                category_id = ensure_bulk_category(category_name, stats)
-                ensure_bulk_model(category_id, model_name, stats)
-                continue
-
-            # Формат: Категория | Модель | Вид товара
-            if len(parts) == 3:
-                category_name, model_name, type_name = parts
-
-                if not category_name or not model_name or not type_name:
-                    errors.append(f"Строка {line_number}: нужны категория, модель и вид товара")
-                    continue
-
-                category_id = ensure_bulk_category(category_name, stats)
-                model_id = ensure_bulk_model(category_id, model_name, stats)
-                ensure_bulk_type(model_id, type_name, stats)
-                continue
-
-            # Для товара нужна минимум 5 колонок:
-            # Категория | Модель | Вид товара | Товар | Цена
-            if len(parts) == 4:
-                errors.append(
-                    f"Строка {line_number}: для товара нужна цена. "
-                    "Формат: Категория | Модель | Вид товара | Товар | Цена"
-                )
-                continue
-
-            category_name = parts[0]
-            model_name = parts[1]
-            type_name = parts[2]
-            product_name = parts[3]
-            price = parts[4]
-            description = " | ".join(parts[5:]).strip() if len(parts) >= 6 else ""
-
-            if not category_name or not model_name or not type_name or not product_name or not price:
-                errors.append(
-                    f"Строка {line_number}: пустое обязательное поле. "
-                    "Нужны категория, модель, вид товара, товар и цена"
-                )
-                continue
-
-            category_id = ensure_bulk_category(category_name, stats)
-            model_id = ensure_bulk_model(category_id, model_name, stats)
-            type_id = ensure_bulk_type(model_id, type_name, stats)
-
-            existing_product_id = find_product_id_by_name(type_id, product_name)
+            existing_product_id = find_catalog_product_id(
+                brand_name,
+                category_name,
+                series_name,
+                model_name,
+                sim_name,
+                memory_name,
+                color_name,
+                product_name,
+            )
 
             if existing_product_id:
                 update_product_price(existing_product_id, price, changed_by=changed_by)
-
                 if description:
                     update_product_description(existing_product_id, description)
-
                 stats["products_updated"] += 1
                 continue
 
-            product_id = add_product(
-                type_id=type_id,
-                name=product_name,
+            product_id = add_catalog_product(
+                brand_name=brand_name,
+                category_name=category_name,
+                series_name=series_name,
+                model_name=model_name,
+                sim_name=sim_name,
+                memory_name=memory_name,
+                color_name=color_name,
+                product_name=product_name,
                 description=description,
                 photo_file_id=None,
                 price=price,
@@ -207,9 +123,11 @@ def process_bulk_catalog_text(raw_text, changed_by=None):
             if product_id:
                 stats["products_created"] += 1
             else:
+                stats["skipped"] += 1
                 errors.append(f"Строка {line_number}: не удалось добавить товар")
 
         except Exception as e:
+            stats["skipped"] += 1
             errors.append(f"Строка {line_number}: {e}")
 
     return stats, errors
@@ -253,21 +171,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ===== FAST FIX: PRODUCT PRICE AFTER PHOTO =====
-    # Этот блок стоит высоко специально, чтобы цена товара точно сохранялась.
+    # ===== ADD PRODUCT PRICE AFTER PHOTO =====
 
     if admin_state == "add_product_price":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
 
-        type_id = context.user_data.get("new_product_type_id")
-        name = context.user_data.get("new_product_name")
-        emoji_id = context.user_data.get("new_product_emoji_id")
-        description = context.user_data.get("new_product_description", "")
-        photo_file_id = context.user_data.get("new_product_photo_file_id")
         price = text.strip()
-
         if not price:
             await update.message.reply_text(
                 "Цена пустая. Введите цену товара, например: 100 000",
@@ -275,53 +186,95 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        if not type_id or not name:
+        data = {
+            "brand_name": context.user_data.get("new_product_brand_name"),
+            "category_name": context.user_data.get("new_product_category_name"),
+            "series_name": context.user_data.get("new_product_series_name", ""),
+            "model_name": context.user_data.get("new_product_model_name"),
+            "sim_name": context.user_data.get("new_product_sim_name", ""),
+            "memory_name": context.user_data.get("new_product_memory_name"),
+            "color_name": context.user_data.get("new_product_color_name"),
+            "product_name": context.user_data.get("new_product_name"),
+            "description": context.user_data.get("new_product_description", ""),
+            "photo_file_id": context.user_data.get("new_product_photo_file_id"),
+            "emoji_id": context.user_data.get("new_product_emoji_id"),
+        }
+
+        required = [
+            data["brand_name"],
+            data["category_name"],
+            data["model_name"],
+            data["memory_name"],
+            data["color_name"],
+            data["product_name"],
+        ]
+        if not all(required):
+            clear_admin_temp_data(context)
             await update.message.reply_text(
-                (
-                    "Ошибка добавления товара.\n\n"
-                    f"type_id: {type_id}\n"
-                    f"name: {name}\n\n"
-                    "Попробуйте добавить товар заново."
-                ),
+                "Ошибка добавления товара. Не хватает обязательных полей. Попробуйте добавить товар заново.",
                 reply_markup=admin_keyboard(),
             )
-            clear_admin_temp_data(context)
             return
 
         try:
-            product_id = add_product(
-                type_id=type_id,
-                name=name,
-                description=description,
-                photo_file_id=photo_file_id,
-                price=price,
-                emoji_id=emoji_id,
+            existing_product_id = find_catalog_product_id(
+                data["brand_name"],
+                data["category_name"],
+                data["series_name"],
+                data["model_name"],
+                data["sim_name"],
+                data["memory_name"],
+                data["color_name"],
+                data["product_name"],
             )
+
+            if existing_product_id:
+                old_price = update_product_price(existing_product_id, price, changed_by=user_id)
+                update_product_description(existing_product_id, data["description"])
+                if data["photo_file_id"]:
+                    update_product_photo(existing_product_id, data["photo_file_id"])
+                product_id = existing_product_id
+                action_text = f"Товар уже был в каталоге, обновил его ✅\n\nБыло: {old_price}\nСтало: {price}"
+            else:
+                product_id = add_catalog_product(
+                    brand_name=data["brand_name"],
+                    category_name=data["category_name"],
+                    series_name=data["series_name"],
+                    model_name=data["model_name"],
+                    sim_name=data["sim_name"],
+                    memory_name=data["memory_name"],
+                    color_name=data["color_name"],
+                    product_name=data["product_name"],
+                    description=data["description"],
+                    photo_file_id=data["photo_file_id"],
+                    price=price,
+                    emoji_id=data["emoji_id"],
+                )
+                action_text = "Товар добавлен ✅"
+
         except Exception as e:
+            clear_admin_temp_data(context)
             await update.message.reply_text(
                 f"Ошибка сохранения товара:\n{e}",
                 reply_markup=admin_keyboard(),
             )
-            clear_admin_temp_data(context)
-            return
-
-        if not product_id:
-            await update.message.reply_text(
-                "Ошибка: вид товара не найден.",
-                reply_markup=admin_keyboard(),
-            )
-            clear_admin_temp_data(context)
             return
 
         clear_admin_temp_data(context)
         await update.message.reply_text(
             (
-                "Товар добавлен ✅\n\n"
+                f"{action_text}\n\n"
                 f"ID: {product_id}\n"
-                f"Название: {name}\n"
+                f"Бренд: {data['brand_name']}\n"
+                f"Категория: {data['category_name']}\n"
+                f"Серия: {data['series_name'] or 'не указана'}\n"
+                f"Модель: {data['model_name']}\n"
+                f"Симка: {data['sim_name'] or 'не указана'}\n"
+                f"Память: {data['memory_name']}\n"
+                f"Цвет: {data['color_name']}\n"
+                f"Название: {data['product_name']}\n"
                 f"Цена: {price}\n"
-                f"Фото: {'есть' if photo_file_id else 'нет'}\n"
-                f"Premium emoji: {'есть' if emoji_id else 'нет'}"
+                f"Фото: {'есть' if data['photo_file_id'] else 'нет'}"
             ),
             reply_markup=admin_keyboard(),
         )
@@ -332,16 +285,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if order_state == "wait_order_name":
         context.user_data["order_name"] = text
         context.user_data["order_state"] = "wait_order_phone"
-
-        await update.message.reply_text(
-            "Введите номер телефона:",
-            reply_markup=order_menu,
-        )
+        await update.message.reply_text("Введите номер телефона:", reply_markup=order_menu)
         return
 
     if order_state == "wait_order_phone":
         normalized_phone = normalize_ru_phone(text)
-
         if not normalized_phone:
             await update.message.reply_text(
                 (
@@ -359,7 +307,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         context.user_data["order_phone"] = normalized_phone
         context.user_data["order_state"] = "wait_order_address"
-
         await update.message.reply_text(
             (
                 "Введите адрес доставки.\n\n"
@@ -434,10 +381,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id=user.id,
             )
 
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=order_text,
-            )
+            await context.bot.send_message(chat_id=admin_id, text=order_text)
 
         except Exception as e:
             await update.message.reply_text(
@@ -481,7 +425,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if admin_state == "wait_login":
         await try_delete_message(context, update.effective_chat.id, update.message.message_id)
         await delete_saved_prompt(context, update.effective_chat.id, "admin_login_prompt_id")
-
         context.user_data["admin_login_input"] = text
 
         if text == get_admin_login():
@@ -494,25 +437,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             context.user_data["admin_state"] = None
             save_admin_login_attempt(user_id, username, full_name, text, False)
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="Неверный логин.",
-            )
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="Неверный логин.")
         return
 
     if admin_state == "wait_password":
         await try_delete_message(context, update.effective_chat.id, update.message.message_id)
         await delete_saved_prompt(context, update.effective_chat.id, "admin_password_prompt_id")
-
         login = context.user_data.get("admin_login_input", "")
 
         if text == get_admin_password():
             if not is_main_admin(user_id) and not is_admin_in_db(user_id):
                 context.user_data["admin_logged"] = False
                 context.user_data["admin_state"] = None
-
                 save_admin_login_attempt(user_id, username, full_name, login, False)
-
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
                     text=(
@@ -529,7 +466,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 add_admin_to_db(user_id, username, full_name)
 
             save_admin_login_attempt(user_id, username, full_name, login, True)
-
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="Вход выполнен ✅\n\n" + ADMIN_PANEL_TEXT,
@@ -538,13 +474,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             context.user_data["admin_logged"] = False
             context.user_data["admin_state"] = None
-
             save_admin_login_attempt(user_id, username, full_name, login, False)
-
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="Неверный пароль.",
-            )
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="Неверный пароль.")
         return
 
     # ===== ADD ADMIN =====
@@ -554,10 +485,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Нет доступа.")
             return
 
-        raw_admin_id = text.strip()
-
         try:
-            new_admin_id = int(raw_admin_id)
+            new_admin_id = int(text.strip())
         except ValueError:
             await update.message.reply_text(
                 "Telegram ID должен быть числом.\n\nНапример: 707131428",
@@ -565,14 +494,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        add_admin_to_db(
-            telegram_id=new_admin_id,
-            username=None,
-            full_name="Добавлен владельцем",
-        )
-
+        add_admin_to_db(telegram_id=new_admin_id, username=None, full_name="Добавлен владельцем")
         clear_admin_temp_data(context)
-
         await update.message.reply_text(
             (
                 "Админ добавлен ✅\n\n"
@@ -588,10 +511,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Нет доступа.")
             return
 
-        raw_admin_id = text.strip()
-
         try:
-            admin_id_to_delete = int(raw_admin_id)
+            admin_id_to_delete = int(text.strip())
         except ValueError:
             await update.message.reply_text(
                 "Telegram ID должен быть числом.\n\nНапример: 707131428",
@@ -600,11 +521,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if admin_id_to_delete == get_admin_id():
-            await update.message.reply_text(
-                "Основного админа удалить нельзя.",
-                reply_markup=admin_keyboard(),
-            )
             clear_admin_temp_data(context)
+            await update.message.reply_text("Основного админа удалить нельзя.", reply_markup=admin_keyboard())
             return
 
         deleted_count = delete_admin_from_db(admin_id_to_delete)
@@ -612,326 +530,130 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if deleted_count:
             await update.message.reply_text(
-                (
-                    "Админ удалён ✅\n\n"
-                    f"Telegram ID: {admin_id_to_delete}\n\n"
-                    "Теперь этот пользователь не сможет войти в админку."
-                ),
+                f"Админ удалён ✅\n\nTelegram ID: {admin_id_to_delete}",
                 reply_markup=admin_keyboard(),
             )
         else:
             await update.message.reply_text(
-                (
-                    "Админ не найден.\n\n"
-                    f"Telegram ID: {admin_id_to_delete}"
-                ),
+                f"Админ не найден.\n\nTelegram ID: {admin_id_to_delete}",
                 reply_markup=admin_keyboard(),
             )
         return
 
-    # ===== CATEGORY =====
+    # ===== MANUAL ADD PRODUCT =====
 
-    if admin_state == "add_category_name":
+    if admin_state == "add_product_brand":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
-        category_name, emoji_id = extract_text_and_custom_emoji(update.message)
-
-        if not category_name:
-            await update.message.reply_text(
-                "Название категории пустое. Отправьте premium emoji вместе с текстом, например: [emoji] iPhone",
-                reply_markup=cancel_admin_keyboard(),
-            )
+        value, emoji_id = extract_text_and_custom_emoji(update.message)
+        if not value:
+            await update.message.reply_text("Бренд пустой. Введите бренд, например: Apple", reply_markup=cancel_admin_keyboard())
             return
+        context.user_data["new_product_brand_name"] = value
+        context.user_data["admin_state"] = "add_product_category"
+        await update.message.reply_text("Введите категорию.\n\nНапример: Смартфоны", reply_markup=cancel_admin_keyboard())
+        return
 
-        category_id = add_category(category_name, emoji_id)
-        clear_admin_temp_data(context)
-
+    if admin_state == "add_product_category":
+        if not is_admin_user(user_id) or not is_admin_logged(context):
+            await update.message.reply_text("Нет доступа.")
+            return
+        value, emoji_id = extract_text_and_custom_emoji(update.message)
+        if not value:
+            await update.message.reply_text("Категория пустая. Введите категорию.", reply_markup=cancel_admin_keyboard())
+            return
+        context.user_data["new_product_category_name"] = value
+        context.user_data["admin_state"] = "add_product_series"
         await update.message.reply_text(
-            (
-                "Категория добавлена ✅\n\n"
-                f"ID: {category_id}\n"
-                f"Название: {category_name}\n"
-                f"Premium emoji: {'есть' if emoji_id else 'нет'}"
-            ),
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-    if admin_state == "rename_category":
-        if not is_admin_user(user_id) or not is_admin_logged(context):
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        category_id = context.user_data.get("edit_category_id")
-        category_name, emoji_id = extract_text_and_custom_emoji(update.message)
-
-        if not category_id:
-            clear_admin_temp_data(context)
-            await update.message.reply_text("Ошибка. Категория не найдена.", reply_markup=admin_keyboard())
-            return
-
-        if not category_name:
-            await update.message.reply_text(
-                "Название категории пустое.",
-                reply_markup=cancel_admin_keyboard(),
-            )
-            return
-
-        try:
-            rename_category(category_id, category_name, emoji_id)
-            await update.message.reply_text(
-                (
-                    "Категория переименована ✅\n\n"
-                    f"Новое название: {category_name}\n"
-                    f"Premium emoji: {'есть' if emoji_id else 'нет'}"
-                ),
-                reply_markup=admin_keyboard(),
-            )
-        except Exception as e:
-            await update.message.reply_text(
-                f"Ошибка переименования категории:\n{e}",
-                reply_markup=admin_keyboard(),
-            )
-
-        clear_admin_temp_data(context)
-        return
-
-    # ===== MODEL =====
-
-    if admin_state == "add_model_name":
-        if not is_admin_user(user_id) or not is_admin_logged(context):
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        model_name, emoji_id = extract_text_and_custom_emoji(update.message)
-
-        if not model_name:
-            await update.message.reply_text(
-                "Название модели пустое. Отправьте premium emoji вместе с текстом, например: [emoji] iPhone 17",
-                reply_markup=cancel_admin_keyboard(),
-            )
-            return
-
-        context.user_data["new_model_name"] = model_name
-        context.user_data["new_model_emoji_id"] = emoji_id
-        context.user_data["admin_state"] = "add_model_description"
-
-        await update.message.reply_text(
-            (
-                "Введите описание модели.\n\n"
-                "Если описание не нужно, напишите -"
-            ),
+            "Введите серию.\n\nНапример: 15 серия\nЕсли серии нет, отправьте -",
             reply_markup=cancel_admin_keyboard(),
         )
         return
 
-    if admin_state == "add_model_description":
+    if admin_state == "add_product_series":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
-        category_id = context.user_data.get("new_model_category_id")
-        model_name = context.user_data.get("new_model_name")
-        emoji_id = context.user_data.get("new_model_emoji_id")
-        description = "" if text == "-" else text
-
-        if not category_id or not model_name:
-            clear_admin_temp_data(context)
-            await update.message.reply_text(
-                "Ошибка добавления модели. Попробуйте заново.",
-                reply_markup=admin_keyboard(),
-            )
-            return
-
-        model_id = add_model(category_id, model_name, description, emoji_id)
-        clear_admin_temp_data(context)
-
-        await update.message.reply_text(
-            (
-                "Модель добавлена ✅\n\n"
-                f"ID: {model_id}\n"
-                f"Название: {model_name}\n"
-                f"Premium emoji: {'есть' if emoji_id else 'нет'}"
-            ),
-            reply_markup=admin_keyboard(),
-        )
+        value, emoji_id = extract_text_and_custom_emoji(update.message)
+        context.user_data["new_product_series_name"] = clean_catalog_value(value, optional=True)
+        context.user_data["admin_state"] = "add_product_model"
+        await update.message.reply_text("Введите модель.\n\nНапример: iPhone 15 Pro", reply_markup=cancel_admin_keyboard())
         return
 
-    if admin_state == "rename_model":
+    if admin_state == "add_product_model":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
-        model_id = context.user_data.get("edit_model_id")
-
-        if not model_id:
-            clear_admin_temp_data(context)
-            await update.message.reply_text("Ошибка. Модель не найдена.", reply_markup=admin_keyboard())
+        value, emoji_id = extract_text_and_custom_emoji(update.message)
+        if not value:
+            await update.message.reply_text("Модель пустая. Введите модель.", reply_markup=cancel_admin_keyboard())
             return
-
-        rename_model(model_id, text)
-        clear_admin_temp_data(context)
-
+        context.user_data["new_product_model_name"] = value
+        context.user_data["admin_state"] = "add_product_sim"
         await update.message.reply_text(
-            f"Модель переименована ✅\n\nНовое название: {text}",
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-    if admin_state == "edit_model_description":
-        if not is_admin_user(user_id) or not is_admin_logged(context):
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        model_id = context.user_data.get("edit_model_id")
-        new_description = "" if text == "-" else text
-
-        if not model_id:
-            clear_admin_temp_data(context)
-            await update.message.reply_text("Ошибка. Модель не найдена.", reply_markup=admin_keyboard())
-            return
-
-        update_model_description(model_id, new_description)
-        clear_admin_temp_data(context)
-
-        await update.message.reply_text(
-            "Описание модели обновлено ✅",
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-    # ===== PRODUCT TYPE =====
-
-    if admin_state == "add_type_name":
-        if not is_admin_user(user_id) or not is_admin_logged(context):
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        type_name, emoji_id = extract_text_and_custom_emoji(update.message)
-
-        if not type_name:
-            await update.message.reply_text(
-                "Название вида товара пустое. Отправьте premium emoji вместе с текстом, например: [emoji] e-Sim",
-                reply_markup=cancel_admin_keyboard(),
-            )
-            return
-
-        context.user_data["new_type_name"] = type_name
-        context.user_data["new_type_emoji_id"] = emoji_id
-        context.user_data["admin_state"] = "add_type_description"
-
-        await update.message.reply_text(
-            (
-                "Введите описание вида товара.\n\n"
-                "Например: модели только с e-Sim.\n"
-                "Если описание не нужно, напишите -"
-            ),
+            "Введите симку.\n\nНапример: eSIM, 2 SIM\nЕсли симку указывать не нужно, отправьте -",
             reply_markup=cancel_admin_keyboard(),
         )
         return
 
-    if admin_state == "add_type_description":
+    if admin_state == "add_product_sim":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
+        value, emoji_id = extract_text_and_custom_emoji(update.message)
+        context.user_data["new_product_sim_name"] = clean_catalog_value(value, optional=True)
+        context.user_data["admin_state"] = "add_product_memory"
+        await update.message.reply_text("Введите память.\n\nНапример: 256GB", reply_markup=cancel_admin_keyboard())
+        return
 
-        model_id = context.user_data.get("new_type_model_id")
-        type_name = context.user_data.get("new_type_name")
-        emoji_id = context.user_data.get("new_type_emoji_id")
-        description = "" if text == "-" else text
-
-        if not model_id or not type_name:
-            clear_admin_temp_data(context)
-            await update.message.reply_text(
-                "Ошибка добавления вида товара. Попробуйте заново.",
-                reply_markup=admin_keyboard(),
-            )
+    if admin_state == "add_product_memory":
+        if not is_admin_user(user_id) or not is_admin_logged(context):
+            await update.message.reply_text("Нет доступа.")
             return
+        value, emoji_id = extract_text_and_custom_emoji(update.message)
+        if not value:
+            await update.message.reply_text("Память пустая. Введите память.", reply_markup=cancel_admin_keyboard())
+            return
+        context.user_data["new_product_memory_name"] = value
+        context.user_data["admin_state"] = "add_product_color"
+        await update.message.reply_text("Введите цвет.\n\nНапример: Blue", reply_markup=cancel_admin_keyboard())
+        return
 
-        type_id = add_type(model_id, type_name, description, emoji_id)
-        clear_admin_temp_data(context)
-
+    if admin_state == "add_product_color":
+        if not is_admin_user(user_id) or not is_admin_logged(context):
+            await update.message.reply_text("Нет доступа.")
+            return
+        value, emoji_id = extract_text_and_custom_emoji(update.message)
+        if not value:
+            await update.message.reply_text("Цвет пустой. Введите цвет.", reply_markup=cancel_admin_keyboard())
+            return
+        context.user_data["new_product_color_name"] = value
+        context.user_data["admin_state"] = "add_product_name"
         await update.message.reply_text(
             (
-                "Вид товара добавлен ✅\n\n"
-                f"ID: {type_id}\n"
-                f"Название: {type_name}\n"
-                f"Premium emoji: {'есть' if emoji_id else 'нет'}"
+                "Введите полное название товара.\n\n"
+                "Например:\n"
+                "iPhone 15 Pro 256GB eSIM Blue\n\n"
+                "Можно отправить premium emoji + текст."
             ),
-            reply_markup=admin_keyboard(),
+            reply_markup=cancel_admin_keyboard(),
         )
         return
-
-    if admin_state == "rename_type":
-        if not is_admin_user(user_id) or not is_admin_logged(context):
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        type_id = context.user_data.get("edit_type_id")
-
-        if not type_id:
-            clear_admin_temp_data(context)
-            await update.message.reply_text("Ошибка. Вид товара не найден.", reply_markup=admin_keyboard())
-            return
-
-        rename_type(type_id, text)
-        clear_admin_temp_data(context)
-
-        await update.message.reply_text(
-            f"Вид товара переименован ✅\n\nНовое название: {text}",
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-    if admin_state == "edit_type_description":
-        if not is_admin_user(user_id) or not is_admin_logged(context):
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        type_id = context.user_data.get("edit_type_id")
-        description = "" if text == "-" else text
-
-        if not type_id:
-            clear_admin_temp_data(context)
-            await update.message.reply_text("Ошибка. Вид товара не найден.", reply_markup=admin_keyboard())
-            return
-
-        update_type_description(type_id, description)
-        clear_admin_temp_data(context)
-
-        await update.message.reply_text(
-            "Описание вида товара обновлено ✅",
-            reply_markup=admin_keyboard(),
-        )
-        return
-
-    # ===== ADD PRODUCT =====
 
     if admin_state == "add_product_name":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
         product_name, emoji_id = extract_text_and_custom_emoji(update.message)
-
         if not product_name:
-            await update.message.reply_text(
-                "Название товара пустое. Отправьте premium emoji вместе с текстом, например: [emoji] iPhone 17 256GB e-Sim Blue",
-                reply_markup=cancel_admin_keyboard(),
-            )
+            await update.message.reply_text("Название товара пустое.", reply_markup=cancel_admin_keyboard())
             return
-
         context.user_data["new_product_name"] = product_name
         context.user_data["new_product_emoji_id"] = emoji_id
         context.user_data["admin_state"] = "add_product_description"
-
         await update.message.reply_text(
-            (
-                "Введите описание товара.\n\n"
-                "Если описание не нужно, напишите -"
-            ),
+            "Введите описание товара.\n\nЕсли описание не нужно, напишите -",
             reply_markup=cancel_admin_keyboard(),
         )
         return
@@ -940,16 +662,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
         description = "" if text == "-" else text
         context.user_data["new_product_description"] = description
         context.user_data["admin_state"] = "add_product_photo"
-
         await update.message.reply_text(
-            (
-                "Отправьте фото товара.\n\n"
-                "Если фото не нужно, напишите -"
-            ),
+            "Отправьте фото товара.\n\nЕсли фото не нужно, напишите -",
             reply_markup=cancel_admin_keyboard(),
         )
         return
@@ -958,21 +675,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
         if text == "-":
             context.user_data["new_product_photo_file_id"] = None
             context.user_data["admin_state"] = "add_product_price"
-
-            await update.message.reply_text(
-                "Введите цену товара:",
-                reply_markup=cancel_admin_keyboard(),
-            )
+            await update.message.reply_text("Введите цену товара:", reply_markup=cancel_admin_keyboard())
             return
-
-        await update.message.reply_text(
-            "Нужно отправить фото или написать -",
-            reply_markup=cancel_admin_keyboard(),
-        )
+        await update.message.reply_text("Нужно отправить фото или написать -", reply_markup=cancel_admin_keyboard())
         return
 
     # ===== EDIT PRODUCT =====
@@ -981,96 +689,78 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
         product_id = context.user_data.get("edit_product_id")
-
         if not product_id:
             clear_admin_temp_data(context)
             await update.message.reply_text("Ошибка. Товар не найден.", reply_markup=admin_keyboard())
             return
-
         rename_product(product_id, text)
         clear_admin_temp_data(context)
-
-        await update.message.reply_text(
-            f"Название товара обновлено ✅\n\nНовое название: {text}",
-            reply_markup=admin_keyboard(),
-        )
+        await update.message.reply_text(f"Название товара обновлено ✅\n\nНовое название: {text}", reply_markup=admin_keyboard())
         return
 
     if admin_state == "edit_product_description":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
         product_id = context.user_data.get("edit_product_id")
         description = "" if text == "-" else text
-
         if not product_id:
             clear_admin_temp_data(context)
             await update.message.reply_text("Ошибка. Товар не найден.", reply_markup=admin_keyboard())
             return
-
         update_product_description(product_id, description)
         clear_admin_temp_data(context)
-
-        await update.message.reply_text(
-            "Описание товара обновлено ✅",
-            reply_markup=admin_keyboard(),
-        )
+        await update.message.reply_text("Описание товара обновлено ✅", reply_markup=admin_keyboard())
         return
 
     if admin_state == "edit_product_photo":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
         product_id = context.user_data.get("edit_product_id")
-
         if not product_id:
             clear_admin_temp_data(context)
             await update.message.reply_text("Ошибка. Товар не найден.", reply_markup=admin_keyboard())
             return
-
         if text == "-":
             update_product_photo(product_id, None)
             clear_admin_temp_data(context)
-
-            await update.message.reply_text(
-                "Фото товара удалено ✅",
-                reply_markup=admin_keyboard(),
-            )
+            await update.message.reply_text("Фото товара удалено ✅", reply_markup=admin_keyboard())
             return
-
-        await update.message.reply_text(
-            "Отправьте новое фото или напишите - чтобы удалить фото.",
-            reply_markup=cancel_admin_keyboard(),
-        )
+        await update.message.reply_text("Отправьте новое фото или напишите - чтобы удалить фото.", reply_markup=cancel_admin_keyboard())
         return
 
     if admin_state == "edit_product_price":
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
         product_id = context.user_data.get("edit_product_id")
-
         if not product_id:
             clear_admin_temp_data(context)
             await update.message.reply_text("Ошибка. Товар не найден.", reply_markup=admin_keyboard())
             return
-
         old_price = update_product_price(product_id, text, changed_by=user_id)
         clear_admin_temp_data(context)
-
         await update.message.reply_text(
-            (
-                "Цена товара обновлена ✅\n\n"
-                f"Было: {old_price}\n"
-                f"Стало: {text}"
-            ),
+            f"Цена товара обновлена ✅\n\nБыло: {old_price}\nСтало: {text}",
             reply_markup=admin_keyboard(),
         )
+        return
+
+    if admin_state == "edit_catalog_field":
+        if not is_admin_user(user_id) or not is_admin_logged(context):
+            await update.message.reply_text("Нет доступа.")
+            return
+        product_id = context.user_data.get("edit_product_id")
+        field_name = context.user_data.get("edit_catalog_field")
+        if not product_id or not field_name:
+            clear_admin_temp_data(context)
+            await update.message.reply_text("Ошибка. Товар не найден.", reply_markup=admin_keyboard())
+            return
+        update_product_catalog_fields(product_id, {field_name: text})
+        clear_admin_temp_data(context)
+        await update.message.reply_text("Поле товара обновлено ✅", reply_markup=admin_keyboard())
         return
 
     # ===== BULK CATALOG ADD =====
@@ -1079,15 +769,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin_user(user_id) or not is_admin_logged(context):
             await update.message.reply_text("Нет доступа.")
             return
-
         stats, errors = process_bulk_catalog_text(text, changed_by=user_id)
         clear_admin_temp_data(context)
 
         result = (
             "📦 Массовое добавление каталога завершено ✅\n\n"
-            f"Создано категорий: {stats['categories_created']}\n"
-            f"Создано моделей: {stats['models_created']}\n"
-            f"Создано видов товара: {stats['types_created']}\n"
             f"Создано товаров: {stats['products_created']}\n"
             f"Обновлено товаров: {stats['products_updated']}\n"
             f"Пропущено строк: {stats['skipped']}"
@@ -1095,14 +781,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if errors:
             result += "\n\nОшибки:\n" + "\n".join(errors[:30])
-
             if len(errors) > 30:
                 result += f"\n\nИ ещё ошибок: {len(errors) - 30}"
 
-        await update.message.reply_text(
-            result,
-            reply_markup=admin_keyboard(),
-        )
+        await update.message.reply_text(result, reply_markup=admin_keyboard())
         return
 
     # ===== BULK PRICE UPDATE =====
@@ -1118,10 +800,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         for line in lines:
             line = line.strip()
-
             if not line:
                 continue
-
             if "=" not in line:
                 errors.append(f"{line} — нет знака =")
                 continue
@@ -1145,19 +825,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             updated.append(f"#{product_id}: {old_price} → {new_price}")
 
         clear_admin_temp_data(context)
-
         result = "Массовое обновление цен завершено ✅\n\n"
 
         if updated:
             result += "Обновлено:\n" + "\n".join(updated[:30]) + "\n\n"
-
         if errors:
             result += "Ошибки:\n" + "\n".join(errors[:30])
 
-        await update.message.reply_text(
-            result,
-            reply_markup=admin_keyboard(),
-        )
+        await update.message.reply_text(result, reply_markup=admin_keyboard())
         return
 
     # ===== NORMAL TEXT =====
@@ -1171,10 +846,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text_clean.endswith("О нас"):
-        await update.message.reply_text(
-            wide_text(ABOUT_TEXT),
-            reply_markup=reply_menu,
-        )
+        await update.message.reply_text(wide_text(ABOUT_TEXT), reply_markup=reply_menu)
         return
 
     await update.message.reply_text(
@@ -1199,7 +871,4 @@ async def send_cart_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         + f"\n\nПозиций в корзине: {len(valid_product_ids)}"
     )
 
-    await update.message.reply_text(
-        text_msg,
-        reply_markup=cart_markup(context),
-    )
+    await update.message.reply_text(text_msg, reply_markup=cart_markup(context))

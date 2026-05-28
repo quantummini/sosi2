@@ -12,6 +12,7 @@ def db_connect():
 def init_db():
     with db_connect() as conn:
         with conn.cursor() as cur:
+            # Старые справочники оставлены для безопасной миграции и совместимости.
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS categories (
                     id SERIAL PRIMARY KEY,
@@ -27,7 +28,7 @@ def init_db():
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS models (
                     id SERIAL PRIMARY KEY,
-                    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+                    category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
                     name TEXT NOT NULL,
                     description TEXT DEFAULT '',
                     emoji_id TEXT,
@@ -38,11 +39,12 @@ def init_db():
             cur.execute("ALTER TABLE models ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';")
             cur.execute("ALTER TABLE models ADD COLUMN IF NOT EXISTS emoji_id TEXT;")
             cur.execute("ALTER TABLE models ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
+            cur.execute("ALTER TABLE models ALTER COLUMN category_id DROP NOT NULL;")
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS product_types (
                     id SERIAL PRIMARY KEY,
-                    model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+                    model_id INTEGER REFERENCES models(id) ON DELETE CASCADE,
                     name TEXT NOT NULL,
                     description TEXT DEFAULT '',
                     emoji_id TEXT,
@@ -53,12 +55,14 @@ def init_db():
             cur.execute("ALTER TABLE product_types ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';")
             cur.execute("ALTER TABLE product_types ADD COLUMN IF NOT EXISTS emoji_id TEXT;")
             cur.execute("ALTER TABLE product_types ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
+            cur.execute("ALTER TABLE product_types ALTER COLUMN model_id DROP NOT NULL;")
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS products (
                     id SERIAL PRIMARY KEY,
-                    model_id INTEGER REFERENCES models(id) ON DELETE CASCADE,
-                    type_id INTEGER REFERENCES product_types(id) ON DELETE CASCADE,
+                    category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+                    model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
+                    type_id INTEGER REFERENCES product_types(id) ON DELETE SET NULL,
                     name TEXT NOT NULL,
                     description TEXT DEFAULT '',
                     photo_file_id TEXT,
@@ -69,22 +73,48 @@ def init_db():
                     updated_at TIMESTAMP DEFAULT NOW()
                 );
             """)
-            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE;")
-            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS model_id INTEGER REFERENCES models(id) ON DELETE CASCADE;")
-            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS type_id INTEGER REFERENCES product_types(id) ON DELETE CASCADE;")
+
+            # Новая лестница каталога:
+            # 1 бренд, 2 категория, 3 серия optional, 4 модель,
+            # 5 симка optional, 6 память, 7 цвет, 8 карточка товара.
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS brand_name TEXT DEFAULT '';")
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS category_name TEXT DEFAULT '';")
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS series_name TEXT DEFAULT '';")
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS model_name TEXT DEFAULT '';")
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS sim_name TEXT DEFAULT '';")
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS memory_name TEXT DEFAULT '';")
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS color_name TEXT DEFAULT '';")
+
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL;")
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS model_id INTEGER REFERENCES models(id) ON DELETE SET NULL;")
+            cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS type_id INTEGER REFERENCES product_types(id) ON DELETE SET NULL;")
             cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';")
             cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS photo_file_id TEXT;")
             cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS price TEXT NOT NULL DEFAULT '';")
             cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS emoji_id TEXT;")
             cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
             cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();")
-
-            # Безопасная миграция для старой базы Railway:
-            # раньше products.category_id/model_id могли быть NOT NULL.
-            # В новой структуре товар связан через type_id -> model_id -> category_id,
-            # поэтому эти старые NOT NULL ограничения нужно снять.
             cur.execute("ALTER TABLE products ALTER COLUMN category_id DROP NOT NULL;")
             cur.execute("ALTER TABLE products ALTER COLUMN model_id DROP NOT NULL;")
+            cur.execute("ALTER TABLE products ALTER COLUMN type_id DROP NOT NULL;")
+
+            # Подтягиваем старые названия в новые поля, если база уже была заполнена.
+            cur.execute("""
+                UPDATE products p
+                SET
+                    brand_name = COALESCE(NULLIF(p.brand_name, ''), c.name, ''),
+                    category_name = COALESCE(NULLIF(p.category_name, ''), m.name, ''),
+                    model_name = COALESCE(NULLIF(p.model_name, ''), t.name, '')
+                FROM categories c, models m, product_types t
+                WHERE p.category_id = c.id
+                  AND p.model_id = m.id
+                  AND p.type_id = t.id
+                  AND (
+                    COALESCE(p.brand_name, '') = ''
+                    OR COALESCE(p.category_name, '') = ''
+                    OR COALESCE(p.model_name, '') = ''
+                  );
+            """)
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
@@ -141,5 +171,3 @@ def init_db():
                     created_at TIMESTAMP DEFAULT NOW()
                 );
             """)
-
-

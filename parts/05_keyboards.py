@@ -19,6 +19,24 @@ order_menu = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+# Callback cache for catalog navigation. It keeps callback_data short and safe.
+CATALOG_CALLBACK_CACHE = {}
+
+
+def make_catalog_callback(step, filters=None):
+    payload = {
+        "step": step,
+        "filters": normalize_filters(filters or {}),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    token = hashlib.md5(raw.encode("utf-8")).hexdigest()[:18]
+    CATALOG_CALLBACK_CACHE[token] = payload
+    return f"nav_{token}"
+
+
+def get_catalog_callback(token):
+    return CATALOG_CALLBACK_CACHE.get(token)
+
 
 def button(text, callback_data, style=None):
     api_kwargs = {}
@@ -96,34 +114,26 @@ def pagination_buttons(prefix, page, total, page_size=ADMIN_PAGE_SIZE):
 
 
 def catalog_keyboard():
-    categories = get_categories_for_catalog()
+    options = get_catalog_options({}, "brand_name")
+    buttons = []
 
-    buttons = [
-        pbutton(
-            text=name,
-            callback_data=f"cat_{category_id}",
-            emoji_id=emoji_id,
+    for representative_id, brand_name, total in options:
+        buttons.append(
+            pbutton(
+                text=brand_name,
+                callback_data=make_catalog_callback("category", {"brand_name": brand_name}),
+            )
         )
-        for category_id, name, emoji_id in categories
-    ]
 
-    keyboard = make_two_columns(buttons)
-    # Корзина тут специально убрана.
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(make_two_columns(buttons))
 
 
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [button("➕ Добавить категорию", "admin_add_category")],
-        [button("➕ Добавить модель", "admin_add_model")],
-        [button("➕ Добавить вид товара", "admin_add_type")],
         [button("➕ Добавить товар", "admin_add_product")],
         [button("📦 Массовое добавление каталога", "admin_bulk_catalog")],
         [button("⚡ Массовое обновление цен", "admin_bulk_prices")],
-        [button(" Редактор категорий", "admin_edit_categories")],
-        [button(" Редактор моделей", "admin_edit_models")],
-        [button(" Редактор видов товара", "admin_edit_types")],
-        [button(" Редактор товаров", "admin_products")],
+        [button("📦 Редактор товаров", "admin_products")],
         [button(" Добавить админа", "admin_add_admin")],
         [button(" Список админов", "admin_list_admins")],
         [button("❌ Удалить админа", "admin_delete_admin")],
@@ -137,106 +147,10 @@ def cancel_admin_keyboard():
     ])
 
 
-def admin_choose_category_for_model_keyboard(page=0):
-    categories = get_categories()
-    page_items, total = paginate_items(categories, page)
-
-    keyboard = []
-    for category_id, name in page_items:
-        keyboard.append([
-            button(name, f"admin_model_cat_{category_id}"),
-        ])
-
-    keyboard += pagination_buttons("admin_add_model_page", page, total)
-    keyboard.append([button("Назад в админ-панель", "admin_menu")])
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-def admin_choose_model_for_type_keyboard(page=0):
-    models = get_all_models()
-    page_items, total = paginate_items(models, page)
-
-    keyboard = []
-    for model_id, model_name, description, category_name in page_items:
-        keyboard.append([
-            button(f"{category_name} → {model_name}", f"admin_type_model_{model_id}"),
-        ])
-
-    keyboard += pagination_buttons("admin_add_type_page", page, total)
-    keyboard.append([button("Назад в админ-панель", "admin_menu")])
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-def admin_choose_type_for_product_keyboard(page=0):
-    types = get_all_types()
-    page_items, total = paginate_items(types, page)
-
-    keyboard = []
-    for type_id, type_name, description, model_name, category_name in page_items:
-        keyboard.append([
-            button(
-                f"{category_name} → {model_name} → {type_name}",
-                f"admin_product_type_{type_id}",
-            ),
-        ])
-
-    keyboard += pagination_buttons("admin_add_product_page", page, total)
-    keyboard.append([button("Назад в админ-панель", "admin_menu")])
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-def admin_edit_categories_keyboard(page=0):
-    categories = get_categories()
-    page_items, total = paginate_items(categories, page)
-
-    keyboard = []
-    for category_id, name in page_items:
-        keyboard.append([
-            button(name, f"admin_edit_category_{category_id}"),
-        ])
-
-    keyboard += pagination_buttons("admin_edit_categories_page", page, total)
-    keyboard.append([button("Назад в админ-панель", "admin_menu")])
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-def admin_edit_models_keyboard(page=0):
-    models = get_all_models()
-    page_items, total = paginate_items(models, page)
-
-    keyboard = []
-    for model_id, model_name, description, category_name in page_items:
-        keyboard.append([
-            button(f"{category_name} → {model_name}", f"admin_edit_model_{model_id}"),
-        ])
-
-    keyboard += pagination_buttons("admin_edit_models_page", page, total)
-    keyboard.append([button("Назад в админ-панель", "admin_menu")])
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-def admin_edit_types_keyboard(page=0):
-    types = get_all_types()
-    page_items, total = paginate_items(types, page)
-
-    keyboard = []
-    for type_id, type_name, description, model_name, category_name in page_items:
-        keyboard.append([
-            button(
-                f"{category_name} → {model_name} → {type_name}",
-                f"admin_edit_type_{type_id}",
-            ),
-        ])
-
-    keyboard += pagination_buttons("admin_edit_types_page", page, total)
-    keyboard.append([button("Назад в админ-панель", "admin_menu")])
-
-    return InlineKeyboardMarkup(keyboard)
+def catalog_back_keyboard():
+    return InlineKeyboardMarkup([
+        [default_button(" Вернуться в каталог", "catalog")],
+    ])
 
 
 def admin_products_keyboard(page=0):
@@ -244,7 +158,10 @@ def admin_products_keyboard(page=0):
     page_items, total = paginate_items(products, page)
 
     keyboard = []
-    for product_id, category_name, model_name, type_name, product_name, price in page_items:
+    for product_id, brand_name, category_name, path_name, product_name, price in page_items:
+        short_path = " → ".join(part for part in [brand_name, category_name, path_name] if part)
+        if len(short_path) > 45:
+            short_path = short_path[:42] + "..."
         keyboard.append([
             button(
                 f"#{product_id} — {product_name} — {price}",
@@ -254,5 +171,4 @@ def admin_products_keyboard(page=0):
 
     keyboard += pagination_buttons("admin_products_page", page, total)
     keyboard.append([button("Назад в админ-панель", "admin_menu")])
-
     return InlineKeyboardMarkup(keyboard)
