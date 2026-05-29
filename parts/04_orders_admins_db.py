@@ -11,8 +11,62 @@ def save_order(user_id, username, full_name, phone, address, product_id, product
     if quantity < 1:
         quantity = 1
 
+    order_number_text = str(order_number).strip() if order_number else None
+    if order_number_text == "":
+        order_number_text = None
+
     with db_connect() as conn:
         with conn.cursor() as cur:
+            # Если старый обработчик всё ещё вызывает save_order 10 раз для
+            # одного товара, не создаём 10 строк: прибавляем количество к уже
+            # созданной строке этого же заказа.
+            if order_number_text:
+                cur.execute("""
+                    SELECT id
+                    FROM orders
+                    WHERE order_number = %s
+                      AND user_id IS NOT DISTINCT FROM %s
+                      AND COALESCE(phone, '') = COALESCE(%s, '')
+                      AND COALESCE(address, '') = COALESCE(%s, '')
+                      AND product_id IS NOT DISTINCT FROM %s
+                      AND COALESCE(product_name, '') = COALESCE(%s, '')
+                      AND COALESCE(price, '') = COALESCE(%s, '')
+                    ORDER BY id ASC
+                    LIMIT 1
+                    FOR UPDATE;
+                """, (
+                    order_number_text,
+                    user_id,
+                    phone,
+                    address,
+                    product_id,
+                    product_name,
+                    price,
+                ))
+                existing = cur.fetchone()
+                if existing:
+                    cur.execute("""
+                        UPDATE orders
+                        SET quantity = COALESCE(quantity, 1) + %s,
+                            username = %s,
+                            full_name = %s,
+                            phone = %s,
+                            address = %s,
+                            product_name = %s,
+                            price = %s
+                        WHERE id = %s;
+                    """, (
+                        quantity,
+                        username,
+                        full_name,
+                        phone,
+                        address,
+                        product_name,
+                        price,
+                        existing[0],
+                    ))
+                    return
+
             cur.execute("""
                 INSERT INTO orders
                 (user_id, username, full_name, phone, address, product_id, product_name, price, quantity, order_number)
@@ -27,7 +81,7 @@ def save_order(user_id, username, full_name, phone, address, product_id, product
                 product_name,
                 price,
                 quantity,
-                str(order_number) if order_number else None,
+                order_number_text,
             ))
 
 
@@ -154,9 +208,10 @@ def enforce_orders_storage_limit():
 def get_recent_orders(days=3, limit=120):
     """Возвращает строки последних заказов.
 
-    limit теперь означает количество заказов, а не количество товарных строк.
-    Поэтому заказ на 10 одинаковых товаров не обрежется и не вытеснит другие
-    заказы из истории.
+    limit означает количество заказов, а не количество товарных строк.
+    Если в старой базе order_number пустой, строки одного оформления
+    склеиваются по клиенту, адресу и минуте создания. Это исправляет историю,
+    где один заказ на 10 шт. показывался как 10 отдельных "записей".
     """
     with db_connect() as conn:
         with conn.cursor() as cur:
@@ -164,7 +219,18 @@ def get_recent_orders(days=3, limit=120):
                 WITH recent_rows AS (
                     SELECT
                         o.*,
-                        COALESCE(o.order_number, 'row:' || o.id::text) AS order_key
+                        CASE
+                            WHEN NULLIF(BTRIM(COALESCE(o.order_number, '')), '') IS NOT NULL THEN
+                                'order:' || BTRIM(o.order_number)
+                            ELSE
+                                'legacy:' ||
+                                COALESCE(o.user_id::text, '') || '|' ||
+                                COALESCE(o.username, '') || '|' ||
+                                COALESCE(o.full_name, '') || '|' ||
+                                COALESCE(o.phone, '') || '|' ||
+                                COALESCE(o.address, '') || '|' ||
+                                TO_CHAR(DATE_TRUNC('minute', o.created_at), 'YYYY-MM-DD HH24:MI')
+                        END AS order_key
                     FROM orders o
                     WHERE o.created_at >= NOW() - (%s * INTERVAL '1 day')
                 ), recent_order_keys AS (
@@ -178,6 +244,7 @@ def get_recent_orders(days=3, limit=120):
                     LIMIT %s
                 )
                 SELECT
+                    r.order_key,
                     r.id,
                     r.order_number,
                     r.user_id,
@@ -218,6 +285,7 @@ def build_recent_orders_text(days=3, limit=120, max_chars=3600):
 
     for row in rows:
         (
+            order_key,
             order_row_id,
             order_number,
             user_id,
@@ -232,7 +300,7 @@ def build_recent_orders_text(days=3, limit=120, max_chars=3600):
             created_at,
         ) = row
 
-        group_key = f"order_{order_number}" if order_number else f"row_{order_row_id}"
+        group_key = order_key or (f"order_{order_number}" if order_number else f"row_{order_row_id}")
 
         if group_key not in groups:
             groups[group_key] = {
