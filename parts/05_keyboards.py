@@ -56,14 +56,13 @@ def get_admin_catalog_value_callback(token):
 
 
 def button(text, callback_data, style=None):
-    api_kwargs = {}
-    if style:
-        api_kwargs["style"] = style
-
+    # Telegram Bot API не поддерживает поле style у inline-кнопок.
+    # Если отправлять его через api_kwargs, часть клиентов/версий API возвращает
+    # ошибку при создании клавиатуры. Параметр style оставлен для совместимости
+    # с остальным кодом, но в Telegram не передаётся.
     return InlineKeyboardButton(
         text=text,
         callback_data=callback_data,
-        api_kwargs=api_kwargs,
     )
 
 
@@ -84,18 +83,11 @@ def default_button(text, callback_data):
 
 
 def pbutton(text, callback_data, emoji_id=None, style=None):
-    api_kwargs = {}
-
-    if USE_PREMIUM_BUTTON_EMOJI and emoji_id:
-        api_kwargs["icon_custom_emoji_id"] = emoji_id
-
-    if style:
-        api_kwargs["style"] = style
-
+    # icon_custom_emoji_id тоже не является стандартным полем inline-кнопки.
+    # Не отправляем его в API, чтобы кнопки каталога не падали с BadRequest.
     return InlineKeyboardButton(
         text=text,
         callback_data=callback_data,
-        api_kwargs=api_kwargs,
     )
 
 
@@ -150,7 +142,7 @@ def admin_keyboard():
         [button("➕ Добавить товар", "admin_add_product")],
         [button("📦 Массовое добавление каталога", "admin_bulk_catalog")],
         [button("⚡ Массовое обновление цен", "admin_bulk_prices")],
-        [button("📋 Заказы за 3 дня", "admin_recent_orders")],
+        [button("📋 История заказов", "admin_recent_orders")],
         [button("🧩 Редактор брендов", "admin_edit_level_brand")],
         [button("📂 Редактор категорий", "admin_edit_level_category")],
         [button("🧬 Редактор серий", "admin_edit_level_series")],

@@ -506,7 +506,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             query,
             text_msg,
             InlineKeyboardMarkup([
-                [button("🔄 Обновить", "admin_recent_orders")],
+                [button("🔄 Обновить историю", "admin_recent_orders")],
                 [button("Назад в админ-панель", "admin_menu")],
             ]),
         )

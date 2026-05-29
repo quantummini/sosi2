@@ -135,6 +135,7 @@ def init_db():
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_id INTEGER;")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_name TEXT;")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS price TEXT;")
+            cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1;")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_number TEXT;")
             cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS items TEXT;")
             cur.execute("ALTER TABLE orders ALTER COLUMN items DROP NOT NULL;")

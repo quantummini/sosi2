@@ -2,14 +2,33 @@
 # ORDERS / ADMINS
 # =========================
 
-def save_order(user_id, username, full_name, phone, address, product_id, product_name, price, order_number=None):
+def save_order(user_id, username, full_name, phone, address, product_id, product_name, price, order_number=None, quantity=1):
+    try:
+        quantity = int(quantity or 1)
+    except (TypeError, ValueError):
+        quantity = 1
+
+    if quantity < 1:
+        quantity = 1
+
     with db_connect() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO orders
-                (user_id, username, full_name, phone, address, product_id, product_name, price, order_number)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-            """, (user_id, username, full_name, phone, address, product_id, product_name, price, str(order_number) if order_number else None))
+                (user_id, username, full_name, phone, address, product_id, product_name, price, quantity, order_number)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+            """, (
+                user_id,
+                username,
+                full_name,
+                phone,
+                address,
+                product_id,
+                product_name,
+                price,
+                quantity,
+                str(order_number) if order_number else None,
+            ))
 
 
 def get_orders_relation_size_bytes():
@@ -133,25 +152,47 @@ def enforce_orders_storage_limit():
 
 
 def get_recent_orders(days=3, limit=120):
+    """Возвращает строки последних заказов.
+
+    limit теперь означает количество заказов, а не количество товарных строк.
+    Поэтому заказ на 10 одинаковых товаров не обрежется и не вытеснит другие
+    заказы из истории.
+    """
     with db_connect() as conn:
         with conn.cursor() as cur:
             cur.execute("""
+                WITH recent_rows AS (
+                    SELECT
+                        o.*,
+                        COALESCE(o.order_number, 'row:' || o.id::text) AS order_key
+                    FROM orders o
+                    WHERE o.created_at >= NOW() - (%s * INTERVAL '1 day')
+                ), recent_order_keys AS (
+                    SELECT
+                        order_key,
+                        MAX(created_at) AS last_created_at,
+                        MAX(id) AS last_id
+                    FROM recent_rows
+                    GROUP BY order_key
+                    ORDER BY last_created_at DESC, last_id DESC
+                    LIMIT %s
+                )
                 SELECT
-                    id,
-                    order_number,
-                    user_id,
-                    username,
-                    full_name,
-                    phone,
-                    address,
-                    product_id,
-                    product_name,
-                    price,
-                    created_at
-                FROM orders
-                WHERE created_at >= NOW() - (%s * INTERVAL '1 day')
-                ORDER BY created_at DESC, id DESC
-                LIMIT %s;
+                    r.id,
+                    r.order_number,
+                    r.user_id,
+                    r.username,
+                    r.full_name,
+                    r.phone,
+                    r.address,
+                    r.product_id,
+                    r.product_name,
+                    r.price,
+                    COALESCE(r.quantity, 1) AS quantity,
+                    r.created_at
+                FROM recent_rows r
+                JOIN recent_order_keys k ON k.order_key = r.order_key
+                ORDER BY k.last_created_at DESC, k.last_id DESC, r.created_at ASC, r.id ASC;
             """, (days, limit))
             return cur.fetchall()
 
@@ -170,7 +211,7 @@ def build_recent_orders_text(days=3, limit=120, max_chars=3600):
     rows = get_recent_orders(days=days, limit=limit)
 
     if not rows:
-        return f"📋 Заказы за {days} дня\n\nЗаказов за последние {days} дня нет."
+        return f"📋 История заказов\n\nЗаказов за последние {days} дня нет."
 
     groups = {}
     order_keys = []
@@ -187,6 +228,7 @@ def build_recent_orders_text(days=3, limit=120, max_chars=3600):
             product_id,
             product_name,
             price,
+            quantity,
             created_at,
         ) = row
 
@@ -203,19 +245,48 @@ def build_recent_orders_text(days=3, limit=120, max_chars=3600):
                 "address": address,
                 "created_at": created_at,
                 "items": [],
+                "item_index": {},
             }
             order_keys.append(group_key)
 
-        groups[group_key]["items"].append({
-            "product_id": product_id,
-            "product_name": product_name,
-            "price": price,
-        })
+        try:
+            item_quantity = int(quantity or 1)
+        except (TypeError, ValueError):
+            item_quantity = 1
+
+        if item_quantity < 1:
+            item_quantity = 1
+
+        # Старые заказы могли сохраняться как 10 отдельных строк по 1 шт.
+        # В истории объединяем одинаковый товар внутри одного заказа.
+        item_key = (product_id, product_name or "", price or "")
+        group = groups[group_key]
+        existing_index = group["item_index"].get(item_key)
+
+        if existing_index is None:
+            group["items"].append({
+                "product_id": product_id,
+                "product_name": product_name,
+                "price": price,
+                "quantity": item_quantity,
+            })
+            group["item_index"][item_key] = len(group["items"]) - 1
+        else:
+            group["items"][existing_index]["quantity"] += item_quantity
+
+    total_unique_items = sum(len(groups[key]["items"]) for key in order_keys)
+    total_units = sum(
+        item.get("quantity", 1)
+        for key in order_keys
+        for item in groups[key]["items"]
+    )
 
     lines = [
-        f"📋 Заказы за {days} дня",
+        "📋 История заказов",
+        f"Период: последние {days} дня",
         f"Показано заказов: {len(order_keys)}",
-        f"Показано товарных позиций: {len(rows)}",
+        f"Товарных позиций: {total_unique_items}",
+        f"Всего штук: {total_units}",
         "",
     ]
 
@@ -232,11 +303,30 @@ def build_recent_orders_text(days=3, limit=120, max_chars=3600):
         date_text = format_order_created_at(group.get("created_at"))
 
         item_lines = []
+        order_total = 0
+        has_total = False
+
         for item in group["items"]:
             item_product_id = item.get("product_id") or "?"
             item_product_name = item.get("product_name") or "товар не указан"
             item_price = item.get("price") or "цена не указана"
-            item_lines.append(f"• #{item_product_id} — {item_product_name} — {item_price}")
+            item_quantity = item.get("quantity") or 1
+            price_value = parse_price_to_int(item_price)
+
+            if price_value is not None:
+                item_total = price_value * item_quantity
+                order_total += item_total
+                has_total = True
+                item_lines.append(
+                    f"• #{item_product_id} — {item_product_name} — {item_price} × {item_quantity} шт. = {format_money(item_total)}"
+                )
+            else:
+                item_lines.append(
+                    f"• #{item_product_id} — {item_product_name} — {item_quantity} шт. — {item_price}"
+                )
+
+        if has_total:
+            item_lines.append(f"Итого по заказу: {format_money(order_total)}")
 
         block = (
             f"{index}. 🧾 Заказ {order_label}\n"
@@ -255,7 +345,7 @@ def build_recent_orders_text(days=3, limit=120, max_chars=3600):
         if len(current_text) + len(block) + 80 > max_chars:
             remaining = len(order_keys) - shown_groups
             lines.append(f"...и ещё заказов: {remaining}")
-            lines.append("Откройте кнопку ещё раз позже или смотрите свежие заказы выше.")
+            lines.append("Откройте историю ещё раз позже или смотрите свежие заказы выше.")
             break
 
         lines.append(block)

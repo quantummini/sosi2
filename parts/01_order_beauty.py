@@ -7,16 +7,22 @@ def generate_order_number():
 
 
 def build_pretty_order_text(order_number, order_name, order_phone, order_address, lines):
-    items_text = "\n".join(lines)
+    # Сообщение отправляется с ParseMode.HTML, поэтому пользовательские данные
+    # обязательно экранируем. Иначе имя/адрес с символами <, >, & ломали ответ.
+    safe_order_number = html_escape(str(order_number or ""))
+    safe_order_name = html_escape(str(order_name or ""))
+    safe_order_phone = html_escape(str(order_phone or ""))
+    safe_order_address = html_escape(str(order_address or ""))
+    items_text = "\n".join(html_escape(str(line)) for line in lines)
 
     return (
         "━━━━━━━━━━━━━━━━━━\n"
         "✅ <b>ЗАКАЗ ОФОРМЛЕН</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"🧾 <b>Номер заказа:</b> <code>#{order_number}</code>\n"
-        f"👤 <b>ФИО:</b> {order_name}\n"
-        f"📞 <b>Телефон:</b> {order_phone}\n"
-        f"📍 <b>Адрес:</b> {order_address}\n\n"
+        f"🧾 <b>Номер заказа:</b> <code>#{safe_order_number}</code>\n"
+        f"👤 <b>ФИО:</b> {safe_order_name}\n"
+        f"📞 <b>Телефон:</b> {safe_order_phone}\n"
+        f"📍 <b>Адрес:</b> {safe_order_address}\n\n"
         f"📦 <b>Состав заказа:</b>\n{items_text}\n\n"
         "🙏 <b>Спасибо за покупку!</b>\n"
         "Менеджер скоро свяжется с вами для подтверждения заказа."

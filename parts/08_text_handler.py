@@ -355,7 +355,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_number = generate_order_number()
 
         try:
-            for product_id in valid_product_ids:
+            # Сохраняем один товар одной строкой с количеством, а не 10 строк
+            # по 1 шт. Это исправляет историю заказов и уменьшает размер базы.
+            for product_id, quantity in Counter(valid_product_ids).items():
                 product = get_product(product_id)
                 if not product:
                     continue
@@ -369,6 +371,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     product_id=product[0],
                     product_name=product[1],
                     price=product[4],
+                    quantity=quantity,
                     order_number=order_number,
                 )
 

@@ -5,6 +5,7 @@ import json
 import hashlib
 from datetime import datetime
 from collections import Counter
+from html import escape as html_escape
 
 import psycopg
 from telegram import (
